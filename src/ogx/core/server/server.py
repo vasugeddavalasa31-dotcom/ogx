@@ -191,6 +191,8 @@ async def lifespan(app: StackApp) -> AsyncIterator[None]:
 
     # Start the registry refresh background task
     app.stack.create_registry_refresh_task()
+    # Start the gateway model sync (active TiDB models) if configured
+    app.stack.create_gateway_model_sync_task()
 
     yield
     logger.info("Shutting down")

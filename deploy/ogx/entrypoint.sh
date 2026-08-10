@@ -51,6 +51,15 @@ if gateway_models_url:
             flush=True,
         )
 
+# Runtime sync: OGX re-fetches the gateway model list on an interval, so models
+# enabled/disabled in the gateway's TiDB registry appear/disappear without a
+# redeploy. Defaults to the same 5-minute cadence as the gateway's TiDB cache.
+cfg.setdefault("server", {})
+cfg["server"]["gateway_models_url"] = gateway_models_url
+cfg["server"]["gateway_models_sync_interval_seconds"] = int(
+    os.environ.get("GATEWAY_MODELS_SYNC_INTERVAL_SECONDS", "300")
+)
+
 # Optional Postgres: switch both backends when POSTGRES_HOST is provided.
 if os.environ.get("POSTGRES_HOST"):
     pg = {

@@ -97,6 +97,7 @@ RESOURCES = [
 
 REGISTRY_REFRESH_INTERVAL_SECONDS = 300
 REGISTRY_REFRESH_TASK = None
+GATEWAY_MODEL_SYNC_TASK = None
 TEST_RECORDING_CONTEXT = None
 
 # ID fields for registered resources that should trigger skipping
@@ -844,6 +845,42 @@ class Stack:
 
         REGISTRY_REFRESH_TASK.add_done_callback(cb)
 
+    def create_gateway_model_sync_task(self):
+        """Start the periodic gateway-model sync (active TiDB models via the gateway).
+
+        No-op unless ``server.gateway_models_url`` is configured. The task fetches
+        the gateway's /v1/models list on an interval and registers/unregisters
+        models at runtime, so new models enabled in the gateway registry appear
+        in OGX without a redeploy.
+        """
+        assert self.impls is not None, "Must call initialize() before starting"
+
+        server_cfg = self.run_config.server
+        if not server_cfg.gateway_models_url:
+            return
+
+        models_api = self.impls.get(Api.models)
+        if models_api is None:
+            return
+
+        global GATEWAY_MODEL_SYNC_TASK
+        interval = server_cfg.gateway_models_sync_interval_seconds
+        GATEWAY_MODEL_SYNC_TASK = asyncio.create_task(
+            gateway_model_sync_task(
+                models_api,
+                server_cfg.gateway_models_url,
+                interval,
+            )
+        )
+
+        def cb(task):
+            if task.cancelled():
+                logger.warning("Gateway model sync task cancelled")
+            elif task.exception():
+                logger.error("Gateway model sync task failed", error=str(task.exception()))
+
+        GATEWAY_MODEL_SYNC_TASK.add_done_callback(cb)
+
     async def shutdown(self):
         if self.job_runtime is not None:
             self.job_runtime.pool.shutdown()
@@ -874,6 +911,10 @@ class Stack:
         if REGISTRY_REFRESH_TASK:
             REGISTRY_REFRESH_TASK.cancel()
 
+        global GATEWAY_MODEL_SYNC_TASK
+        if GATEWAY_MODEL_SYNC_TASK:
+            GATEWAY_MODEL_SYNC_TASK.cancel()
+
         # Shutdown storage backends
         from ogx.core.storage.kvstore.kvstore import shutdown_kvstore_backends
         from ogx.core.storage.sqlstore.sqlstore import shutdown_sqlstore_backends
@@ -902,6 +943,66 @@ async def refresh_registry_task(impls: dict[Api, Any], interval_seconds: int = R
     logger.info("starting registry refresh task", interval_seconds=interval_seconds)
     while True:
         await refresh_registry_once(impls)
+
+        await asyncio.sleep(interval_seconds)
+
+
+async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: int):
+    """Periodically fetch active models from the gateway and sync the registry.
+
+    Models present in the gateway list are registered as unprefixed aliases on
+    the first active inference provider (same semantics as provider_id="all" at
+    startup). Models previously synced and no longer in the list are unregistered.
+    """
+    import json as _json
+    import urllib.request as _request
+
+    logger.info("starting gateway model sync task", url=url, interval_seconds=interval_seconds)
+    synced_ids: set[str] = set()
+
+    while True:
+        try:
+            with _request.urlopen(url, timeout=15) as resp:
+                data = _json.load(resp)
+            wanted = {m["id"] for m in data.get("data", []) if m.get("id")}
+
+            provider_ids = list(getattr(models_api, "impls_by_provider_id", {}).keys())
+            if not provider_ids:
+                logger.warning("gateway model sync: no active inference providers")
+            else:
+                first_provider = provider_ids[0]
+                for model_id in sorted(wanted):
+                    if model_id in synced_ids:
+                        continue
+                    try:
+                        if await models_api.has_model(model_id):
+                            continue
+                        await models_api.register_model(
+                            RegisterModelRequest(
+                                model_id=model_id,
+                                provider_id=first_provider,
+                                provider_model_id="auto",
+                                model_type=ModelType.llm,
+                                metadata={"_unprefixed_alias": True},
+                            )
+                        )
+                        logger.info("gateway model sync: registered", model_id=model_id)
+                    except Exception as exc:
+                        logger.warning("gateway model sync: register failed", model_id=model_id, error=str(exc))
+
+                for model_id in list(synced_ids):
+                    if model_id in wanted:
+                        continue
+                    try:
+                        await models_api.unregister_model(model_id)
+                        logger.info("gateway model sync: unregistered", model_id=model_id)
+                    except Exception as exc:
+                        logger.warning("gateway model sync: unregister failed", model_id=model_id, error=str(exc))
+                    synced_ids.discard(model_id)
+
+            synced_ids.update(wanted)
+        except Exception as exc:
+            logger.warning("gateway model sync cycle failed", error=str(exc))
 
         await asyncio.sleep(interval_seconds)
 

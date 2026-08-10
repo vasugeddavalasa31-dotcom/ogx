@@ -812,6 +812,19 @@ class ServerConfig(BaseModel):
     registry_refresh_interval_seconds: int = Field(
         default=300, description="Interval in seconds between registry refreshes for syncing model information", gt=0
     )
+    gateway_models_url: str = Field(
+        default="",
+        description=(
+            "URL of the gateway /v1/models endpoint. When set, OGX periodically "
+            "syncs its model registry with the models enabled in the gateway "
+            "(which reads the TiDB admin_model registry)."
+        ),
+    )
+    gateway_models_sync_interval_seconds: int = Field(
+        default=300,
+        description="Interval in seconds to re-sync models from the gateway",
+        gt=0,
+    )
     insecure: bool = Field(default=False, description="Disable TLS enforcement. For local development only.")
     tls_config: ServerTLSConfig | None = Field(default=None, description="TLS cipher suite configuration.")
     hsts_max_age: int = Field(default=31536000, description="HSTS max-age in seconds (0 to disable).", ge=0)
