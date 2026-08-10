@@ -13,7 +13,6 @@ coverage*
 .mypy_cache
 .pytest_cache
 .ruff_cache
-uv.lock
 node_modules
 build
 /tmp
