@@ -1,5 +1,9 @@
 import type { Model } from "ogx-client/resources/models";
-import { filterModels, parseModelAllowlist } from "./model-filter";
+import {
+  filterManagedModels,
+  filterModels,
+  parseModelAllowlist,
+} from "./model-filter";
 
 const models = [
   { id: "model-a" },
@@ -27,6 +31,41 @@ describe("model filtering", () => {
 
     expect(filterModels(models, allowed).map(model => model.id)).toEqual([
       "model-b",
+    ]);
+  });
+
+  test("keeps only managed LLM models, dropping provider-prefixed duplicates", () => {
+    const withDupes = [
+      { id: "deepseek-v4-flash", custom_metadata: { model_type: "llm" } },
+      {
+        id: "openai/deepseek-v4-flash",
+        custom_metadata: { model_type: "llm" },
+      },
+      { id: "deepseek-v4-pro", custom_metadata: { model_type: "llm" } },
+      { id: "openai/deepseek-v4-pro", custom_metadata: { model_type: "llm" } },
+      {
+        id: "sentence-transformers/nomic-ai/nomic-embed-text-v1.5",
+        custom_metadata: { model_type: "embedding" },
+      },
+      {
+        id: "sentence-transformers/Qwen/Qwen3-Reranker-0.6B",
+        custom_metadata: { model_type: "rerank" },
+      },
+    ] as unknown as Model[];
+
+    expect(filterManagedModels(withDupes).map(model => model.id)).toEqual([
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+    ]);
+  });
+
+  test("keeps prefixed models that have no unprefixed alias", () => {
+    const onlyPrefixed = [
+      { id: "moonshotai/kimi-k2.6", custom_metadata: { model_type: "llm" } },
+    ] as unknown as Model[];
+
+    expect(filterManagedModels(onlyPrefixed).map(model => model.id)).toEqual([
+      "moonshotai/kimi-k2.6",
     ]);
   });
 });

@@ -26,7 +26,11 @@ import {
   removeConversation,
   updateConversation,
 } from "@/lib/conversation-history";
-import { filterModels, parseModelAllowlist } from "@/lib/model-filter";
+import {
+  filterManagedModels,
+  filterModels,
+  parseModelAllowlist,
+} from "@/lib/model-filter";
 
 const configuredModelIds = parseModelAllowlist(
   process.env.NEXT_PUBLIC_OGX_UI_ALLOWED_MODELS
@@ -138,14 +142,9 @@ function ChatPlaygroundContent() {
           ? result
           : (result as { data: Model[] }).data || [];
 
-        const llmModels = allModels.filter(
-          (m: ModelWithMeta) =>
-            m.custom_metadata?.model_type === "llm" ||
-            !m.custom_metadata?.model_type
-        );
-
-        llmModels.sort((a, b) => a.id.localeCompare(b.id));
-        const visibleModels = filterModels(llmModels, configuredModelIds);
+        const managedModels = filterManagedModels(allModels);
+        managedModels.sort((a, b) => a.id.localeCompare(b.id));
+        const visibleModels = filterModels(managedModels, configuredModelIds);
         setModels(visibleModels);
         setSelectedModel(currentModel => {
           if (

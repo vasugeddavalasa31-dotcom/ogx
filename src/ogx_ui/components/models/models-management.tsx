@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthClient } from "@/hooks/use-auth-client";
+import { filterManagedModels } from "@/lib/model-filter";
 
 type Status = "idle" | "loading" | "error" | "success";
 
@@ -75,7 +76,11 @@ export function ModelsManagement() {
             m.provider_resource_id ?? meta.provider_resource_id,
         };
       });
-      setModels(items);
+      setModels(
+        filterManagedModels(
+          items as Array<{ id: string; custom_metadata?: unknown }>
+        ) as Record<string, unknown>[]
+      );
       setStatus("success");
     } catch (err: unknown) {
       console.error("Failed to fetch models:", err);
