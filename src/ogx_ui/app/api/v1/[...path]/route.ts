@@ -5,6 +5,16 @@ const BACKEND_URL =
   process.env.OGX_BACKEND_URL ||
   `http://localhost:${process.env.OGX_PORT || 8321}`;
 
+// Headers that must not be copied from the upstream response: `fetch` has
+// already decoded the body, so echoing content-encoding/content-length would
+// make the client try to decompress plain data and corrupt the response.
+const SKIP_RESPONSE_HEADERS = [
+  "connection",
+  "transfer-encoding",
+  "content-encoding",
+  "content-length",
+];
+
 async function proxyRequest(request: NextRequest, method: string) {
   try {
     // Extract the path from the request URL
@@ -65,7 +75,7 @@ async function proxyRequest(request: NextRequest, method: string) {
       const proxyResponse = new NextResponse(null, { status: 204 });
       // Copy response headers (except problematic ones)
       response.headers.forEach((value, key) => {
-        if (!["connection", "transfer-encoding"].includes(key.toLowerCase())) {
+        if (!SKIP_RESPONSE_HEADERS.includes(key.toLowerCase())) {
           proxyResponse.headers.set(key, value);
         }
       });
@@ -89,7 +99,7 @@ async function proxyRequest(request: NextRequest, method: string) {
 
       // Copy response headers
       response.headers.forEach((value, key) => {
-        if (!["connection", "transfer-encoding"].includes(key.toLowerCase())) {
+        if (!SKIP_RESPONSE_HEADERS.includes(key.toLowerCase())) {
           proxyResponse.headers.set(key, value);
         }
       });
@@ -126,7 +136,7 @@ async function proxyRequest(request: NextRequest, method: string) {
 
     // Copy response headers (except problematic ones)
     response.headers.forEach((value, key) => {
-      if (!["connection", "transfer-encoding"].includes(key.toLowerCase())) {
+      if (!SKIP_RESPONSE_HEADERS.includes(key.toLowerCase())) {
         proxyResponse.headers.set(key, value);
       }
     });
