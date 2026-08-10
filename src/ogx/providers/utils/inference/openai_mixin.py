@@ -16,6 +16,7 @@ import httpx
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from ogx.providers.inline.responses.builtin.responses.types import AssistantMessageWithReasoning
 
 from ogx.core.request_headers import NeedsRequestProviderData
 from ogx.core.routing_tables.models import ModelsRoutingTable
@@ -24,6 +25,16 @@ from ogx.providers.utils.inference.http_client import (
     _merge_network_config_into_client,
     build_network_client_kwargs,
 )
+
+
+def _assistant_message_with_reasoning(
+    message: AssistantMessageWithReasoning,
+) -> dict[str, Any]:
+    """Serialize an assistant message as a dict, keeping `reasoning_content`
+    (required by DeepSeek's thinking mode) which the OpenAI SDK would drop."""
+    data = message.model_dump(exclude_none=True)
+    data["reasoning_content"] = message.reasoning_content
+    return data
 from ogx.providers.utils.inference.model_registry import RemoteInferenceProviderConfig
 from ogx.providers.utils.inference.openai_compat import (
     get_stream_options_for_telemetry,
@@ -406,6 +417,18 @@ class OpenAIMixin(NeedsRequestProviderData, ABC, BaseModel):
         self._validate_model_allowed(provider_model_id)
 
         messages = params.messages
+
+        # DeepSeek's thinking mode requires the assistant's `reasoning_content`
+        # to be echoed back on the next request. The Responses layer tags such
+        # messages with AssistantMessageWithReasoning; convert them to plain
+        # dicts so the extra field reaches the provider.
+        if any(isinstance(m, AssistantMessageWithReasoning) for m in messages):
+            messages = [
+                _assistant_message_with_reasoning(m)
+                if isinstance(m, AssistantMessageWithReasoning)
+                else m
+                for m in messages
+            ]
 
         if self.download_images:
 

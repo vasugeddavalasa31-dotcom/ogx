@@ -475,7 +475,10 @@ async def get_message_type_by_role(role: str) -> type[OpenAIMessageParam] | None
         "user": OpenAIUserMessageParam,
         "system": OpenAISystemMessageParam,
         "assistant": OpenAIAssistantMessageParam,
-        "developer": OpenAIDeveloperMessageParam,
+        # Map the Responses "developer" role to Chat-Completions "system":
+        # several OpenAI-compatible providers (DeepSeek, vLLM, …) reject
+        # "developer" outright, and "system" is universally supported.
+        "developer": OpenAISystemMessageParam,
     }
     return role_to_type.get(role)  # type: ignore[return-value]  # Pydantic models use ModelMetaclass
 
