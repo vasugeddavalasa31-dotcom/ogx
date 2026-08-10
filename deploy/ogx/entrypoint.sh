@@ -14,6 +14,43 @@ for p in cfg["providers"]["inference"]:
         if not api_key:
             print("WARNING: DEEPSEEK_API_KEY is not set — server will start but requests will fail", flush=True)
 
+# Optional: source the LLM model list from the gateway (which reads the TiDB
+# admin_model registry). This makes OGX serve exactly the models enabled in the
+# gateway instead of the hard-coded list in config.template.yaml. Falls back to
+# the static list when the gateway is unreachable.
+gateway_models_url = os.environ.get("GATEWAY_MODELS_URL", "").strip()
+if gateway_models_url:
+    try:
+        import json as _json
+        import urllib.request as _request
+
+        with _request.urlopen(gateway_models_url, timeout=10) as _resp:
+            _data = _json.load(_resp)
+        _models = [
+            m for m in _data.get("data", []) if m.get("id")
+        ]
+        if _models:
+            cfg["registered_resources"]["models"] = [
+                {
+                    "metadata": {},
+                    "model_id": m["id"],
+                    "provider_id": "all",
+                    "provider_model_id": "auto",
+                    "model_type": "llm",
+                }
+                for m in _models
+            ]
+            print(
+                f"Loaded {len(cfg['registered_resources']['models'])} model(s) from gateway: "
+                f"{[m['id'] for m in _models]}",
+                flush=True,
+            )
+    except Exception as _exc:
+        print(
+            f"WARNING: failed to fetch models from gateway ({_exc}); using static model list",
+            flush=True,
+        )
+
 # Optional Postgres: switch both backends when POSTGRES_HOST is provided.
 if os.environ.get("POSTGRES_HOST"):
     pg = {
