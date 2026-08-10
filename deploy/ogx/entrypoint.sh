@@ -9,7 +9,10 @@ cfg = yaml.safe_load(open("/app/config.template.yaml"))
 
 for p in cfg["providers"]["inference"]:
     if p.get("provider_id") == "openai":
-        p["config"]["api_key"] = os.environ["DEEPSEEK_API_KEY"]
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        p["config"]["api_key"] = api_key
+        if not api_key:
+            print("WARNING: DEEPSEEK_API_KEY is not set — server will start but requests will fail", flush=True)
 
 # Optional Postgres: switch both backends when POSTGRES_HOST is provided.
 if os.environ.get("POSTGRES_HOST"):
