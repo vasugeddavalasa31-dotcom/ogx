@@ -1,0 +1,11 @@
+# Force Railway to build with our Dockerfile (Railpack's Python auto-detect
+# would otherwise guess wrong and fail with "no start command").
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/ogx/Dockerfile"
+
+[deploy]
+healthcheckPath = "/"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+numReplicas = 1
