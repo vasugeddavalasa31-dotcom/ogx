@@ -11,7 +11,7 @@ COPY src ./src
 COPY deploy/ogx/config.template.yaml ./config.template.yaml
 COPY deploy/ogx/entrypoint.sh ./entrypoint.sh
 
-RUN uv sync --frozen --no-dev && chmod +x /app/entrypoint.sh
+RUN uv sync --frozen --no-dev --extra starter && chmod +x /app/entrypoint.sh
 
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8321
