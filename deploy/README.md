@@ -8,9 +8,9 @@ Railway deploys this repo automatically — no local Docker needed.
    Env: `DEEPSEEK_API_KEY` + optional `POSTGRES_HOST/PORT/DB/USER/PASSWORD`
    (skip Postgres for a quick SQLite beta; add it for persistence).
    URL example: `https://<ogx>.up.railway.app` (port 8321).
-2. **ogx-ui (optional ops dashboard)**: Dockerfile `src/ogx_ui/Containerfile`
-   (or `deploy/ogx-ui/railway.toml`). Env:
-   `NEXT_PUBLIC_OGX_BASE_URL=https://<ogx>.up.railway.app`.
+2. **ogx-ui (optional ops dashboard)**: Railway service with root directory
+   `src/ogx_ui` (uses `src/ogx_ui/Containerfile` + `src/ogx_ui/railway.toml`).
+   Env: `OGX_BACKEND_URL=https://<ogx>.up.railway.app`.
    Admin at `/admin`, models at `/models`, playground at `/chat-playground`.
 
 The entrypoint renders the real config from env at start

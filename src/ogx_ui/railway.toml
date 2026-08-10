@@ -1,6 +1,6 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "../../src/ogx_ui/Containerfile"
+dockerfilePath = "Containerfile"
 
 [deploy]
 healthcheckPath = "/"
