@@ -13,8 +13,6 @@ import {
   File,
   ChevronRight,
   Box,
-  Plug,
-  Wrench,
   Layers,
   MessageSquare,
   Trash2,
@@ -73,16 +71,6 @@ const manageItems = [
     title: "Models",
     url: "/models",
     icon: Box,
-  },
-  {
-    title: "Connectors",
-    url: "/connectors",
-    icon: Plug,
-  },
-  {
-    title: "Tools",
-    url: "/tools",
-    icon: Wrench,
   },
   {
     title: "Conversations",
