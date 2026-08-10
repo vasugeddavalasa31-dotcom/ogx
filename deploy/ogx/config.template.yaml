@@ -1,15 +1,8 @@
 version: 2
 distro_name: starter
 apis:
-  - batches
-  - files
   - inference
-  - interactions
-  - messages
   - responses
-  - skills
-  - tool_runtime
-  - vector_io
 providers:
   inference:
     - provider_id: openai
