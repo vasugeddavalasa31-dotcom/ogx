@@ -42,4 +42,7 @@ with open("/tmp/ogx-config.yaml", "w") as f:
 EOF
 
 mkdir -p /data
-exec /app/.venv/bin/ogx run /tmp/ogx-config.yaml --port 8321 --insecure
+# Railway injects $PORT and routes traffic to it — listen there (default 8321
+# locally) so the platform healthcheck can reach the server.
+PORT="${PORT:-8321}"
+exec /app/.venv/bin/ogx run /tmp/ogx-config.yaml --port "$PORT" --insecure
