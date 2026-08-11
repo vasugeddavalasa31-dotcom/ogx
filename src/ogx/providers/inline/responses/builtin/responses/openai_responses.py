@@ -914,6 +914,72 @@ class OpenAIResponsesImpl:
                     incremental_input=incremental_input,
                 )
 
+    async def _create_prewarm_response(
+        self,
+        request: CreateResponseRequest,
+    ) -> AsyncIterator[OpenAIResponseObjectStream]:
+        """Build a completed, empty response for `generate=false` prewarms.
+
+        No inference is run and no usage is recorded. When `store=True` the
+        response is persisted using the same input preprocessing as the real
+        path, so a subsequent `previous_response_id` turn continues normally.
+        """
+        sequence_number = 0
+        created_at = int(time.time())
+
+        all_input, messages, _, _, _ = await self._process_input_with_previous_response(
+            request.input, request.tools, request.previous_response_id, request.conversation
+        )
+        input_items_for_storage = self._prepare_input_items_for_storage(all_input)
+
+        response = OpenAIResponseObject(
+            id=f"resp_{uuid.uuid4()}",
+            created_at=created_at,
+            completed_at=created_at,
+            model=request.model,
+            object="response",
+            output=[],
+            status="completed",
+            text=request.text
+            if request.text is not None
+            else OpenAIResponseText(format=OpenAIResponseTextFormat(type="text")),
+            usage=OpenAIResponseUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                input_tokens_details=OpenAIResponseUsageInputTokensDetails(cached_tokens=0),
+                output_tokens_details=OpenAIResponseUsageOutputTokensDetails(reasoning_tokens=0),
+            ),
+            previous_response_id=request.previous_response_id,
+            store=request.store,
+        )
+
+        if request.store:
+            await self.responses_store.store_response_object(
+                response,
+                input_items_for_storage,
+                messages,
+                incremental_input=bool(request.previous_response_id),
+            )
+
+        in_progress = response.model_copy(
+            update={"status": "in_progress", "completed_at": None}
+        )
+        yield OpenAIResponseObjectStreamResponseCreated(
+            response=in_progress,
+            sequence_number=sequence_number,
+        )
+        sequence_number += 1
+        yield OpenAIResponseObjectStreamResponseInProgress(
+            response=in_progress,
+            sequence_number=sequence_number,
+        )
+        sequence_number += 1
+        yield OpenAIResponseObjectStreamResponseCompleted(
+            response=response,
+            sequence_number=sequence_number,
+        )
+
     async def create_openai_response(
         self,
         request: CreateResponseRequest,
@@ -969,6 +1035,24 @@ class OpenAIResponsesImpl:
         max_tool_calls = request.max_tool_calls
         if max_tool_calls is not None and max_tool_calls < 1:
             raise ValueError(f"Invalid {max_tool_calls=}; should be >= 1")
+
+        # WebSocket prewarm (`generate=false`): the client only wants to warm
+        # the connection. Complete immediately without running inference so no
+        # model tokens are consumed and nothing is billed, while persisting the
+        # response so a follow-up `previous_response_id` turn can continue.
+        extra_body = request.model_extra.get("extra_body") if request.model_extra else None
+        generate = (request.model_extra or {}).get("generate")
+        if generate is None and isinstance(extra_body, dict):
+            generate = extra_body.get("generate")
+        if generate is False:
+            prewarm_gen = self._create_prewarm_response(request)
+            if request.stream:
+                return prewarm_gen
+            final_response = None
+            async for stream_chunk in prewarm_gen:
+                if stream_chunk.type == "response.completed":
+                    final_response = stream_chunk.response
+            return final_response
 
         # Handle background mode
         if request.background:
