@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import JSONResponse
 
 from ogx_api.messages.models import ANTHROPIC_VERSION
-from ogx_api.router_utils import create_path_dependency, standard_responses
+from ogx_api.router_utils import PUBLIC_ROUTE_KEY, create_path_dependency, standard_responses
 from ogx_api.version import OGX_API_V1
 
 from .api import Models
@@ -91,6 +91,10 @@ def create_router(impl: Models) -> APIRouter:
         response_model=OpenAIListModelsResponse,
         summary="List models.",
         description="List models. Returns OpenAI, Anthropic, or Google response format based on SDK detection headers.",
+        # Public: platform healthchecks (e.g. Railway's /v1/models probe) and
+        # the OGX UI can list models without a token. Only inference/tool
+        # endpoints are gated by the gateway's internal secret.
+        openapi_extra={PUBLIC_ROUTE_KEY: True},
         responses={
             200: {"description": "A list of model objects."},
         },
