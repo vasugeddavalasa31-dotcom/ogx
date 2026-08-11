@@ -35,6 +35,14 @@ async function proxyRequest(request: NextRequest, method: string) {
       }
     });
 
+    // When OGX is locked to a shared internal secret, the UI presents that
+    // token so proxied calls keep working (the per-user GitHub token cannot be
+    // validated by the gateway's /auth/ogx endpoint).
+    const uiToken = process.env.OGX_UI_TOKEN;
+    if (uiToken) {
+      headers.set("authorization", `Bearer ${uiToken}`);
+    }
+
     const requestOptions: RequestInit = {
       method,
       headers,

@@ -60,6 +60,24 @@ cfg["server"]["gateway_models_sync_interval_seconds"] = int(
     os.environ.get("GATEWAY_MODELS_SYNC_INTERVAL_SECONDS", "300")
 )
 
+# Optional: lock OGX so only the gateway can call it. Every bearer token is
+# validated against the gateway's /auth/ogx endpoint (shared internal secret),
+# so direct calls to OGX that bypass the gateway's rate limits/billing are
+# rejected. Unset for local/development runs to keep auth disabled.
+ogx_auth_endpoint = os.environ.get("OGX_AUTH_ENDPOINT", "").strip()
+if ogx_auth_endpoint:
+    cfg.setdefault("server", {})
+    cfg["server"]["auth"] = {
+        "provider_config": {
+            "type": "custom",
+            "endpoint": ogx_auth_endpoint,
+        }
+    }
+    print(
+        f"OGX auth enabled: validating bearer tokens via {ogx_auth_endpoint}",
+        flush=True,
+    )
+
 # Optional Postgres: switch both backends when POSTGRES_HOST is provided.
 if os.environ.get("POSTGRES_HOST"):
     pg = {
