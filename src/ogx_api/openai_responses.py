@@ -631,11 +631,31 @@ class OpenAIResponseInputToolMCP(BaseModel):
         return self
 
 
+@json_schema_type
+class OpenAIResponseInputToolNamespace(BaseModel):
+    """Namespace tool container for OrbiterX multi-agent tools.
+
+    OrbiterX sends multi-agent tools (spawn_agent, list_agents, etc.) grouped
+    under a namespace with ``type: "namespace"``. OGX treats all tools within
+    a namespace container as client-side function calls — they are surfaced back
+    to the caller as ``function_call`` items and are never executed server-side.
+
+    :param type: Tool type identifier, always "namespace"
+    :param namespace: The namespace identifier (e.g. ``"multi_agent_v1"``)
+    :param tools: The list of function tool specs within this namespace
+    """
+
+    type: Literal["namespace"] = "namespace"
+    namespace: str
+    tools: list["OpenAIResponseInputToolFunction"] = []
+
+
 OpenAIResponseInputTool = Annotated[
     OpenAIResponseInputToolWebSearch
     | OpenAIResponseInputToolFileSearch
     | OpenAIResponseInputToolFunction
-    | OpenAIResponseInputToolMCP,
+    | OpenAIResponseInputToolMCP
+    | OpenAIResponseInputToolNamespace,
     Field(discriminator="type"),
 ]
 register_schema(OpenAIResponseInputTool, name="OpenAIResponseInputTool")

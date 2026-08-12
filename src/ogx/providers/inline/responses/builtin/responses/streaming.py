@@ -843,7 +843,10 @@ class StreamingResponseOrchestrator:
                         # The model hallucinated a tool name — it doesn't match
                         # any registered function tool, server-side built-in, or
                         # MCP tool.
-                        has_client_tools = any(t.type == "function" for t in self.ctx.response_tools)
+                        has_client_tools = any(
+                            t.type in ("function", "namespace")
+                            for t in self.ctx.response_tools
+                        )
                         if has_client_tools:
                             # A client is expected to handle function calls, so
                             # surface the hallucinated name as a client-side

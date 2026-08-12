@@ -645,13 +645,23 @@ def is_function_tool_call(
         tools: list of available response input tools
 
     Returns:
-        True if the tool call matches a function tool in the tools list
+        True if the tool call matches a function tool in the tools list,
+        including tools nested inside namespace containers.
     """
     if not tool_call.function:
         return False
     for t in tools:
         if t.type == "function" and t.name == tool_call.function.name:
             return True
+        # Namespace containers hold nested function tools (OrbiterX multi-agent
+        # tools like spawn_agent / list_agents). Match by bare name since the
+        # model receives them prefixed with the namespace (e.g.
+        # "multi_agent_v1__spawn_agent") but the namespace is stripped before
+        # this check is reached.
+        if t.type == "namespace":
+            for ns_tool in t.tools:
+                if ns_tool.name == tool_call.function.name:
+                    return True
     return False
 
 
