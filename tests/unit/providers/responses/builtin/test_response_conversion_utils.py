@@ -44,7 +44,9 @@ from ogx_api.openai_responses import (
     OpenAIResponseInputMessageContentFile,
     OpenAIResponseInputMessageContentImage,
     OpenAIResponseInputMessageContentText,
+    OpenAIResponseInputToolCustom,
     OpenAIResponseInputToolFunction,
+    OpenAIResponseInputToolNamespace,
     OpenAIResponseInputToolWebSearch,
     OpenAIResponseMessage,
     OpenAIResponseOutputMessageContentOutputText,
@@ -555,6 +557,54 @@ class TestIsFunctionToolCall:
 
         result = is_function_tool_call(tool_call, tools)
         assert result is False
+
+    def test_is_function_tool_call_true_for_custom_tool(self):
+        # OrbiterX freeform/custom tools are surfaced as client-side function calls.
+        tool_call = OpenAIChatCompletionToolCall(
+            index=0,
+            id="call_123",
+            function=OpenAIChatCompletionToolCallFunction(
+                name="apply_patch",
+                arguments="{}",
+            ),
+        )
+        tools = [
+            OpenAIResponseInputToolCustom(
+                type="custom",
+                name="apply_patch",
+                description="Apply a diff",
+                format={"type": "text", "syntax": "diff", "definition": "..."},
+            ),
+        ]
+
+        result = is_function_tool_call(tool_call, tools)
+        assert result is True
+
+    def test_is_function_tool_call_true_for_namespace_tool_call(self):
+        # The model receives namespaced tools prefixed with the namespace
+        # (e.g. "multi_agent_v1__spawn_agent"); the call must still match.
+        tool_call = OpenAIChatCompletionToolCall(
+            index=0,
+            id="call_123",
+            function=OpenAIChatCompletionToolCallFunction(
+                name="multi_agent_v1__spawn_agent",
+                arguments="{}",
+            ),
+        )
+        tools = [
+            OpenAIResponseInputToolNamespace(
+                type="namespace",
+                name="multi_agent_v1",
+                tools=[
+                    OpenAIResponseInputToolFunction(
+                        type="function", name="spawn_agent", parameters={"type": "object", "properties": {}}
+                    )
+                ],
+            ),
+        ]
+
+        result = is_function_tool_call(tool_call, tools)
+        assert result is True
 
 
 class TestReasoningSupportInConversion:

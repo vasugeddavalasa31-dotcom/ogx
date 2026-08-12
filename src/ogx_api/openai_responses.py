@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from enum import Enum, StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 from typing_extensions import TypedDict
 
 from ogx_api.inference import OpenAITokenLogProb
@@ -655,14 +655,54 @@ class OpenAIResponseInputToolNamespace(BaseModel):
     a namespace container as client-side function calls — they are surfaced back
     to the caller as ``function_call`` items and are never executed server-side.
 
-    :param type: Tool type identifier, always "namespace"
-    :param namespace: The namespace identifier (e.g. ``"multi_agent_v1"``)
-    :param tools: The list of function tool specs within this namespace
+    The OrbiterX client serializes the container's identifier as ``name``;
+    OGX's own tooling uses ``namespace``. Both keys are accepted.
     """
 
     type: Literal["namespace"] = "namespace"
-    namespace: str
+    namespace: str | None = Field(
+        default=None,
+        description="The namespace identifier (e.g. ``multi_agent_v1``)",
+        validation_alias=AliasChoices("namespace", "name"),
+    )
     tools: list["OpenAIResponseInputToolFunction"] = []
+
+    @model_validator(mode="after")
+    def validate_namespace(self) -> "OpenAIResponseInputToolNamespace":
+        if not self.namespace:
+            raise ValueError("Namespace tool must specify a 'namespace' or 'name'")
+        return self
+
+
+@json_schema_type
+class OpenAIResponseInputToolCustom(BaseModel):
+    """OrbiterX freeform/custom tool (type ``"custom"``).
+
+    OrbiterX sends freeform tooling (e.g. shell/exec-style tools) with the
+    non-standard ``custom`` tag. OGX treats them like ordinary client-side
+    function tools: they are exposed to the model as ``function`` tools and
+    surfaced back to the caller as ``function_call`` items.
+    """
+
+    type: Literal["custom"] = "custom"
+    name: str
+    description: str | None = None
+    format: dict[str, Any] | None = None
+
+
+@json_schema_type
+class OpenAIResponseInputToolSearch(BaseModel):
+    """OrbiterX tool-search wrapper (type ``"tool_search"``).
+
+    Tool search is client-side tooling in OrbiterX; OGX does not execute it.
+    The wrapper is accepted for compatibility with OrbiterX clients that send
+    it and is dropped from the tool list sent to the model.
+    """
+
+    type: Literal["tool_search"] = "tool_search"
+    execution: str
+    description: str | None = None
+    parameters: dict[str, Any] | None = None
 
 
 OpenAIResponseInputTool = Annotated[
@@ -670,7 +710,9 @@ OpenAIResponseInputTool = Annotated[
     | OpenAIResponseInputToolFileSearch
     | OpenAIResponseInputToolFunction
     | OpenAIResponseInputToolMCP
-    | OpenAIResponseInputToolNamespace,
+    | OpenAIResponseInputToolNamespace
+    | OpenAIResponseInputToolCustom
+    | OpenAIResponseInputToolSearch,
     Field(discriminator="type"),
 ]
 register_schema(OpenAIResponseInputTool, name="OpenAIResponseInputTool")

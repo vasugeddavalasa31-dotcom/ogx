@@ -20,6 +20,7 @@ from ogx_api import (
     OpenAIResponseInput,
     OpenAIResponseInputTool,
     OpenAIResponseInputToolChoice,
+    OpenAIResponseInputToolCustom,
     OpenAIResponseInputToolFileSearch,
     OpenAIResponseInputToolFunction,
     OpenAIResponseInputToolMCP,
@@ -187,6 +188,22 @@ class ToolContext(BaseModel):
                     for t in tool.tools
                     if isinstance(t, OpenAIResponseInputToolFunction)
                 ]
+            if isinstance(tool, OpenAIResponseInputToolCustom):
+                # OrbiterX freeform/custom tool: surface it to the caller as a
+                # plain function tool (the call itself is returned as a
+                # function_call item, never executed server-side).
+                return [
+                    OpenAIResponseInputToolFunction(
+                        type="function",
+                        name=tool.name,
+                        description=tool.description,
+                        parameters={},
+                    )
+                ]
+            if getattr(tool, "type", None) == "tool_search":
+                # OrbiterX client-side tool search: nothing for the client to
+                # invoke through this response.
+                return []
             # Exhaustive check - all tool types should be handled above
             raise AssertionError(f"Unexpected tool type: {type(tool)}")
 

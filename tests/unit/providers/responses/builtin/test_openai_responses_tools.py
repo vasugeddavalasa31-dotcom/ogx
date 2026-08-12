@@ -1321,3 +1321,40 @@ def test_namespace_tools_flatten_to_function_tools():
     assert len(tools) == 1
     assert tools[0].type == "function"
     assert tools[0].name == "spawn_agent"
+
+
+def test_custom_tool_flattens_to_function_tool():
+    """OrbiterX freeform/custom tools (type 'custom') must be exposed to the
+    model as plain function tools and surfaced back to the client as
+    client-side function calls."""
+    from ogx.providers.inline.responses.builtin.responses.types import ToolContext
+    from ogx_api import OpenAIResponseInputToolCustom
+
+    custom = OpenAIResponseInputToolCustom(
+        name="apply_patch",
+        description="Apply a diff",
+        format={"type": "text", "syntax": "diff", "definition": "..."},
+    )
+
+    ctx = ToolContext([custom])
+    tools = ctx.available_tools()
+
+    assert len(tools) == 1
+    assert tools[0].type == "function"
+    assert tools[0].name == "apply_patch"
+
+
+def test_tool_search_is_omitted_from_available_tools():
+    """OrbiterX tool-search wrappers are client-side tooling; OGX must not
+    expose them to the model nor to the client."""
+    from ogx.providers.inline.responses.builtin.responses.types import ToolContext
+    from ogx_api import OpenAIResponseInputToolSearch
+
+    search = OpenAIResponseInputToolSearch(
+        execution="client",
+        description="Find a tool",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    ctx = ToolContext([search])
+    assert ctx.available_tools() == []

@@ -35,7 +35,12 @@ if gateway_models_url:
                     "metadata": {},
                     "model_id": m["id"],
                     "provider_id": "all",
-                    "provider_model_id": "auto",
+                    # Pin the provider model id instead of "auto": "auto"
+                    # resolves every alias to the provider's *first* listed
+                    # model, so e.g. deepseek-v4-pro would silently run
+                    # deepseek-v4-flash. Here the gateway/TiDB model ids are
+                    # the DeepSeek provider ids, so they map 1:1.
+                    "provider_model_id": m["id"],
                     "model_type": "llm",
                 }
                 for m in _models

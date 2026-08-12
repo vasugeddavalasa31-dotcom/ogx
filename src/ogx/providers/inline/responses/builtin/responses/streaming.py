@@ -844,7 +844,7 @@ class StreamingResponseOrchestrator:
                         # any registered function tool, server-side built-in, or
                         # MCP tool.
                         has_client_tools = any(
-                            t.type in ("function", "namespace")
+                            t.type in ("function", "namespace", "custom")
                             for t in self.ctx.response_tools
                         )
                         if has_client_tools:
@@ -1708,6 +1708,23 @@ class StreamingResponseOrchestrator:
                                 function=nested.model_dump(exclude_none=True),  # type: ignore[typeddict-item,arg-type]
                             )
                         )
+            elif input_tool.type == "custom":
+                # OrbiterX freeform/custom tool. The model calls it like a
+                # function; OGX never executes it, so surface the call back to
+                # the client as a function_call.
+                self.ctx.chat_tools.append(
+                    ChatCompletionToolParam(
+                        type="function",
+                        function={
+                            "name": input_tool.name,
+                            "description": input_tool.description or "",
+                            "parameters": {"type": "object", "properties": {}},
+                        },  # type: ignore[typeddict-item,arg-type]
+                    )
+                )
+            elif input_tool.type == "tool_search":
+                # OrbiterX client-side tool search: never executed server-side.
+                continue
             else:
                 raise ValueError(f"OGX OpenAI Responses does not yet support tool type: {input_tool.type}")
 

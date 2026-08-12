@@ -205,15 +205,18 @@ storage:
       backend: sql_default
 registered_resources:
   models:
+    # provider_model_id must be pinned explicitly: "auto" resolves every alias
+    # to the provider's *first* listed model (deepseek-v4-flash), so the pro
+    # alias would silently run the flash model.
     - metadata: {}
       model_id: deepseek-v4-flash
       provider_id: all
-      provider_model_id: auto
+      provider_model_id: deepseek-v4-flash
       model_type: llm
     - metadata: {}
       model_id: deepseek-v4-pro
       provider_id: all
-      provider_model_id: auto
+      provider_model_id: deepseek-v4-pro
       model_type: llm
   vector_stores: []
 server:
