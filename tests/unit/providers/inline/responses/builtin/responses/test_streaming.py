@@ -570,3 +570,68 @@ class TestSummarizeReasoning:
         call_args = mock_inference.openai_chat_completion.call_args[0][0]
         user_msg = call_args.messages[1].content
         assert "Preserve the key logical steps" in user_msg
+
+
+class TestReasoningEventOrdering:
+    """Reasoning deltas must follow a reasoning output_item.added so clients
+    that require an active reasoning item (e.g. the OrbiterX app) don't
+    panic on the first reasoning_text.delta."""
+
+    async def test_first_reasoning_chunk_emits_item_before_delta(self):
+        orch = _build_orchestrator({})
+        events = [
+            e
+            async for e in orch._handle_reasoning_content_chunk(
+                reasoning_content="step one",
+                reasoning_part_emitted=False,
+                reasoning_content_index=1,
+                reasoning_item_id="reasoning-1",
+                message_output_index=0,
+            )
+        ]
+
+        assert [e.type for e in events] == [
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.reasoning_text.delta",
+        ]
+        assert events[0].item.type == "reasoning"
+        assert events[0].item.id == "reasoning-1"
+        assert events[2].item_id == "reasoning-1"
+        assert orch.reasoning_item_streamed_inline is True
+
+    async def test_subsequent_reasoning_chunks_only_emit_delta(self):
+        orch = _build_orchestrator({})
+        events = [
+            e
+            async for e in orch._handle_reasoning_content_chunk(
+                reasoning_content="step two",
+                reasoning_part_emitted=True,
+                reasoning_content_index=1,
+                reasoning_item_id="reasoning-1",
+                message_output_index=0,
+            )
+        ]
+
+        assert [e.type for e in events] == ["response.reasoning_text.delta"]
+
+    async def test_reasoning_done_closes_the_streamed_item(self):
+        orch = _build_orchestrator({})
+        done = [
+            e
+            async for e in orch._emit_reasoning_done_events(
+                reasoning_text_accumulated=["step one", "step two"],
+                reasoning_content_index=1,
+                reasoning_item_id="reasoning-1",
+                message_output_index=0,
+            )
+        ]
+
+        assert [e.type for e in done] == [
+            "response.reasoning_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+        ]
+        assert done[-1].item.type == "reasoning"
+        assert done[-1].item.id == "reasoning-1"
+        assert done[-1].item.status == "completed"

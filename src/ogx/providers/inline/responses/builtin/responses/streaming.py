@@ -298,6 +298,10 @@ class StreamingResponseOrchestrator:
         self.store = bool(store) if store is not None else True
         self.presence_penalty = presence_penalty
         self.sequence_number = 0
+        # Whether reasoning deltas were streamed inline as a dedicated
+        # reasoning output item. The post-stream reasoning block in
+        # create_response must not emit a duplicate reasoning item in that case.
+        self.reasoning_item_streamed_inline = False
         # Store MCP tool mapping that gets built during tool processing
         self.mcp_tool_to_server: dict[str, OpenAIResponseInputToolMCP] = (
             ctx.tool_context.previous_tools if ctx.tool_context else {}
@@ -639,7 +643,10 @@ class StreamingResponseOrchestrator:
                 # The reasoning_content field is populated by the provider via
                 # openai_chat_completions_with_reasoning, which maps provider-specific
                 # reasoning fields to the standard reasoning_content attribute.
-                if completion_result_data.reasoning_content:
+                # When the streaming path already streamed reasoning inline as a
+                # dedicated reasoning item, skip the post-stream reasoning block to
+                # avoid emitting a duplicate reasoning item.
+                if completion_result_data.reasoning_content and not self.reasoning_item_streamed_inline:
                     reasoning_item = OpenAIResponseOutputMessageReasoningItem(
                         id=f"rs_{uuid.uuid4().hex}",
                         summary=[],
@@ -960,16 +967,33 @@ class StreamingResponseOrchestrator:
         reasoning_content: str,
         reasoning_part_emitted: bool,
         reasoning_content_index: int,
-        message_item_id: str,
+        reasoning_item_id: str,
         message_output_index: int,
     ) -> AsyncIterator[OpenAIResponseObjectStream]:
-        # Emit content_part.added event for first reasoning chunk
+        # Emit output_item.added for the reasoning item on the first chunk so
+        # clients (e.g. the OrbiterX app) have an active reasoning item when
+        # the reasoning_text.delta events arrive. Without it, clients that
+        # require an active item before deltas panic on the first delta.
         if not reasoning_part_emitted:
+            self.reasoning_item_streamed_inline = True
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseOutputItemAdded(
+                response_id=self.response_id,
+                item=OpenAIResponseOutputMessageReasoningItem(
+                    id=reasoning_item_id,
+                    summary=[],
+                    content=None,
+                    status="in_progress",
+                ),
+                output_index=message_output_index,
+                sequence_number=self.sequence_number,
+            )
+            # Emit content_part.added event for first reasoning chunk
             self.sequence_number += 1
             yield OpenAIResponseObjectStreamResponseContentPartAdded(
                 content_index=reasoning_content_index,
                 response_id=self.response_id,
-                item_id=message_item_id,
+                item_id=reasoning_item_id,
                 output_index=message_output_index,
                 part=OpenAIResponseContentPartReasoningText(
                     text="",  # Will be filled incrementally via reasoning deltas
@@ -981,7 +1005,7 @@ class StreamingResponseOrchestrator:
         yield OpenAIResponseObjectStreamResponseReasoningTextDelta(
             content_index=reasoning_content_index,
             delta=reasoning_content,
-            item_id=message_item_id,
+            item_id=reasoning_item_id,
             output_index=message_output_index,
             sequence_number=self.sequence_number,
         )
@@ -1021,7 +1045,7 @@ class StreamingResponseOrchestrator:
         self,
         reasoning_text_accumulated: list[str],
         reasoning_content_index: int,
-        message_item_id: str,
+        reasoning_item_id: str,
         message_output_index: int,
     ) -> AsyncIterator[OpenAIResponseObjectStream]:
         final_reasoning_text = "".join(reasoning_text_accumulated)
@@ -1030,7 +1054,7 @@ class StreamingResponseOrchestrator:
         yield OpenAIResponseObjectStreamResponseReasoningTextDone(
             content_index=reasoning_content_index,
             text=final_reasoning_text,
-            item_id=message_item_id,
+            item_id=reasoning_item_id,
             output_index=message_output_index,
             sequence_number=self.sequence_number,
         )
@@ -1039,11 +1063,25 @@ class StreamingResponseOrchestrator:
         yield OpenAIResponseObjectStreamResponseContentPartDone(
             content_index=reasoning_content_index,
             response_id=self.response_id,
-            item_id=message_item_id,
+            item_id=reasoning_item_id,
             output_index=message_output_index,
             part=OpenAIResponseContentPartReasoningText(
                 text=final_reasoning_text,
             ),
+            sequence_number=self.sequence_number,
+        )
+        # Emit output_item.done for the reasoning item to close the item the
+        # client started when the first reasoning chunk arrived.
+        self.sequence_number += 1
+        yield OpenAIResponseObjectStreamResponseOutputItemDone(
+            response_id=self.response_id,
+            item=OpenAIResponseOutputMessageReasoningItem(
+                id=reasoning_item_id,
+                summary=[],
+                content=[OpenAIResponseOutputMessageReasoningContent(text=final_reasoning_text)],
+                status="completed",
+            ),
+            output_index=message_output_index,
             sequence_number=self.sequence_number,
         )
 
@@ -1093,6 +1131,9 @@ class StreamingResponseOrchestrator:
 
         # Create a placeholder message item for delta events
         message_item_id = f"msg_{uuid.uuid4()}"
+        # Reasoning streams as its own output item so clients have an active
+        # reasoning item while the reasoning_text.delta events arrive.
+        reasoning_item_id = f"rs_{uuid.uuid4()}"
         # Track tool call items for streaming events
         tool_call_item_ids: dict[int, str] = {}
         # Track content parts for streaming events
@@ -1211,7 +1252,7 @@ class StreamingResponseOrchestrator:
                         reasoning_content=reasoning_content,
                         reasoning_part_emitted=reasoning_part_emitted,
                         reasoning_content_index=reasoning_content_index,
-                        message_item_id=message_item_id,
+                        reasoning_item_id=reasoning_item_id,
                         message_output_index=message_output_index,
                     ):
                         # Buffer reasoning events for guardrail check
@@ -1421,7 +1462,7 @@ class StreamingResponseOrchestrator:
             async for event in self._emit_reasoning_done_events(
                 reasoning_text_accumulated=reasoning_text_accumulated,
                 reasoning_content_index=reasoning_content_index,
-                message_item_id=message_item_id,
+                reasoning_item_id=reasoning_item_id,
                 message_output_index=message_output_index,
             ):
                 yield event

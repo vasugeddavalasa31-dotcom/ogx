@@ -155,7 +155,11 @@ async def test_guardrailed_reasoning_streams_before_completion(
         stream = orchestrator._process_streaming_chunks(completion_result(), output_messages=[])
 
         first_event = await asyncio.wait_for(anext(stream), timeout=0.5)
-        assert first_event.type in {"response.content_part.added", "response.reasoning_text.delta"}
+        assert first_event.type in {
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.reasoning_text.delta",
+        }
         assert "thinking..." in mock_guardrails.call_args[0][1]
 
         gate.set()
