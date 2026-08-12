@@ -342,3 +342,52 @@ class TestOpenAIMaxOutputTokensWarning:
     def test_prefix_matching_prefers_more_specific_model(self):
         adapter = _make_adapter()
         assert adapter._get_max_output_tokens("o1-mini-2024-09-12") == 65536
+
+
+class TestOpenAIReasoning:
+    """Tests for OpenAI-compatible reasoning extraction (DeepSeek via this adapter)."""
+
+    async def test_reasoning_stream_extracts_reasoning_content(self):
+        from ogx_api.inference.models import OpenAIChatCompletionChunkWithReasoning
+
+        adapter = _make_adapter()
+
+        class FakeDelta:
+            reasoning_content = "Let me think..."
+
+        class FakeChoice:
+            delta = FakeDelta()
+
+        class FakeChunk:
+            id = "chunk_1"
+            created = 0
+            model = "deepseek-v4-flash"
+            choices = [FakeChoice()]
+            service_tier = None
+            usage = None
+
+        async def fake_stream():
+            yield FakeChunk()
+
+        async def fake_chat_completion(params):  # noqa: ANN001
+            return fake_stream()
+
+        params = OpenAIChatCompletionRequestWithExtraBody(
+            model="deepseek-v4-flash", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+        adapter.openai_chat_completion = fake_chat_completion  # type: ignore[method-assign]
+
+        result = await adapter.openai_chat_completions_with_reasoning(params)
+        chunks = [c async for c in result]
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], OpenAIChatCompletionChunkWithReasoning)
+        assert chunks[0].reasoning_content == "Let me think..."
+
+    async def test_reasoning_non_streaming_raises(self):
+        adapter = _make_adapter()
+        params = OpenAIChatCompletionRequestWithExtraBody(
+            model="deepseek-v4-flash", messages=[{"role": "user", "content": "hi"}], stream=False
+        )
+
+        with pytest.raises(NotImplementedError, match="Non-streaming reasoning is not yet supported"):
+            await adapter.openai_chat_completions_with_reasoning(params)

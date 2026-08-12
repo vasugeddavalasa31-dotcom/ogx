@@ -14,7 +14,9 @@ from ogx_api import (
     ModelType,
     OpenAIChatCompletion,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionChunkWithReasoning,
     OpenAIChatCompletionRequestWithExtraBody,
+    OpenAIChatCompletionWithReasoning,
 )
 
 from .config import OpenAIConfig
@@ -142,11 +144,37 @@ class OpenAIInferenceAdapter(OpenAIMixin):
 
         return await super().openai_chat_completion(params)
 
-    async def openai_chat_completions_with_reasoning(self, params) -> None:
-        raise ValueError(
-            "OpenAI provider does not support reasoning. "
-            "Please remove the reasoning parameter from your request or choose another provider."
-        )
+    async def openai_chat_completions_with_reasoning(
+        self,
+        params: OpenAIChatCompletionRequestWithExtraBody,
+    ) -> OpenAIChatCompletionWithReasoning | AsyncIterator[OpenAIChatCompletionChunkWithReasoning]:
+        """Chat completion with reasoning support for the OpenAI-compatible path.
+
+        OpenAI-compatible providers (including DeepSeek, which this adapter is
+        commonly pointed at) stream thinking text in the non-standard
+        ``reasoning_content`` chunk delta. The OpenAI SDK keeps that field in
+        the delta's extra attributes, so extract it here and wrap each chunk in
+        OpenAIChatCompletionChunkWithReasoning for the Responses layer to emit
+        as a reasoning item.
+        """
+        if not params.stream:
+            raise NotImplementedError("Non-streaming reasoning is not yet supported")
+
+        result = await self.openai_chat_completion(params)
+        if not isinstance(result, AsyncIterator):
+            raise RuntimeError("Expected streaming response for reasoning, but got non-streaming result")
+
+        async def _wrap_chunks() -> AsyncIterator[OpenAIChatCompletionChunkWithReasoning]:
+            async for chunk in result:
+                reasoning = None
+                for choice in chunk.choices or []:
+                    reasoning = getattr(choice.delta, "reasoning_content", None)
+                yield OpenAIChatCompletionChunkWithReasoning(
+                    chunk=chunk,
+                    reasoning_content=reasoning,
+                )
+
+        return _wrap_chunks()
 
     def get_base_url(self) -> str:
         """
