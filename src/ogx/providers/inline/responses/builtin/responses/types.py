@@ -23,6 +23,7 @@ from ogx_api import (
     OpenAIResponseInputToolFileSearch,
     OpenAIResponseInputToolFunction,
     OpenAIResponseInputToolMCP,
+    OpenAIResponseInputToolNamespace,
     OpenAIResponseInputToolWebSearch,
     OpenAIResponseMCPApprovalRequest,
     OpenAIResponseMCPApprovalResponse,
@@ -163,22 +164,36 @@ class ToolContext(BaseModel):
         if not self.current_tools:
             return []
 
-        def convert_tool(tool: OpenAIResponseInputTool) -> OpenAIResponseTool:
+        def convert_tool(tool: OpenAIResponseInputTool) -> list[OpenAIResponseTool]:
             if isinstance(tool, OpenAIResponseInputToolWebSearch):
-                return tool
+                return [tool]
             if isinstance(tool, OpenAIResponseInputToolFileSearch):
-                return tool
+                return [tool]
             if isinstance(tool, OpenAIResponseInputToolFunction):
-                return tool
+                return [tool]
             if isinstance(tool, OpenAIResponseInputToolMCP):
-                return OpenAIResponseToolMCP(
-                    server_label=tool.server_label,
-                    allowed_tools=tool.allowed_tools,
-                )
+                return [
+                    OpenAIResponseToolMCP(
+                        server_label=tool.server_label,
+                        allowed_tools=tool.allowed_tools,
+                    )
+                ]
+            if isinstance(tool, OpenAIResponseInputToolNamespace):
+                # OrbiterX groups multi-agent tools (spawn_agent, list_agents,
+                # wait_agent, ...) under a namespace container. The model sees
+                # them as plain client-side function tools, so flatten them.
+                return [
+                    t
+                    for t in tool.tools
+                    if isinstance(t, OpenAIResponseInputToolFunction)
+                ]
             # Exhaustive check - all tool types should be handled above
             raise AssertionError(f"Unexpected tool type: {type(tool)}")
 
-        return [convert_tool(tool) for tool in self.current_tools]
+        result: list[OpenAIResponseTool] = []
+        for tool in self.current_tools:
+            result.extend(convert_tool(tool))
+        return result
 
 
 class ChatCompletionContext(BaseModel):

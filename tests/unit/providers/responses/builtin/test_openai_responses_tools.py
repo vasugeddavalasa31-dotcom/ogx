@@ -1290,3 +1290,34 @@ async def test_streaming_deltas_stay_consistent_with_final_text_when_marker_spli
 
     assert content_part_done_text == "Global warming is caused by greenhouse gases."
     assert "".join(delta_texts) == content_part_done_text
+
+
+def test_namespace_tools_flatten_to_function_tools():
+    """Namespace containers (OrbiterX multi-agent tools) must flatten to plain
+    function tools so the model can call spawn_agent / list_agents / etc.
+
+    Regression: the schema parsed but `available_tools()` raised
+    'Unexpected tool type: OpenAIResponseInputToolNamespace' (500) and
+    `_process_new_tools` raised 'does not yet support tool type: namespace'."""
+    from ogx.providers.inline.responses.builtin.responses.types import ToolContext
+    from ogx_api import (
+        OpenAIResponseInputToolFunction,
+        OpenAIResponseInputToolNamespace,
+    )
+
+    spawn = OpenAIResponseInputToolFunction(
+        name="spawn_agent",
+        description="Spawn a sub-agent",
+        parameters={"type": "object", "properties": {}},
+    )
+    namespace = OpenAIResponseInputToolNamespace(
+        namespace="multi_agent_v1",
+        tools=[spawn],
+    )
+
+    ctx = ToolContext([namespace])
+    tools = ctx.available_tools()
+
+    assert len(tools) == 1
+    assert tools[0].type == "function"
+    assert tools[0].name == "spawn_agent"

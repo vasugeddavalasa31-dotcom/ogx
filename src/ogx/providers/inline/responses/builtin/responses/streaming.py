@@ -1696,6 +1696,18 @@ class StreamingResponseOrchestrator:
             elif input_tool.type == "mcp":
                 async for stream_event in self._process_mcp_tool(input_tool, output_messages):
                     yield stream_event
+            elif input_tool.type == "namespace":
+                # OrbiterX multi-agent tools arrive grouped in a namespace
+                # container; flatten them into plain function tools so the
+                # model can call spawn_agent / list_agents / wait_agent, etc.
+                for nested in input_tool.tools:
+                    if nested.type == "function":
+                        self.ctx.chat_tools.append(
+                            ChatCompletionToolParam(
+                                type="function",
+                                function=nested.model_dump(exclude_none=True),  # type: ignore[typeddict-item,arg-type]
+                            )
+                        )
             else:
                 raise ValueError(f"OGX OpenAI Responses does not yet support tool type: {input_tool.type}")
 
