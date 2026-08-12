@@ -923,9 +923,10 @@ class OpenAIResponsesImpl:
     ) -> AsyncIterator[OpenAIResponseObjectStream]:
         """Build a completed, empty response for `generate=false` prewarms.
 
-        No inference is run and no usage is recorded. When `store=True` the
-        response is persisted using the same input preprocessing as the real
-        path, so a subsequent `previous_response_id` turn continues normally.
+        No inference is run and no usage is recorded. The response stays
+        continuable so a subsequent `previous_response_id` turn works: it is
+        persisted when `store=True` and kept in the bounded ephemeral cache
+        when `store=False`, matching the real path's semantics.
         """
         sequence_number = 0
         created_at = int(time.time())
@@ -959,6 +960,13 @@ class OpenAIResponsesImpl:
 
         if request.store:
             await self.responses_store.store_response_object(
+                response,
+                input_items_for_storage,
+                messages,
+                incremental_input=bool(request.previous_response_id),
+            )
+        else:
+            self.responses_store.cache_ephemeral(
                 response,
                 input_items_for_storage,
                 messages,

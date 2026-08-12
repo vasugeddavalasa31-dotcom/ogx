@@ -114,6 +114,32 @@ async def test_create_openai_response_with_string_input(openai_responses_impl, m
     assert isinstance(final_response.output[0], OpenAIResponseMessage)
 
 
+async def test_prewarm_generate_false_caches_ephemeral_response(
+    openai_responses_impl, mock_responses_store
+):
+    """A store=false generate=false prewarm must stay continuable via the ephemeral cache."""
+    model = "meta-llama/Llama-3.1-8B-Instruct"
+
+    stream = await openai_responses_impl.create_openai_response(
+        CreateResponseRequest(
+            input="warmup",
+            model=model,
+            stream=True,
+            store=False,
+            generate=False,
+        )
+    )
+
+    events = [event async for event in stream]
+
+    assert events[-1].type == "response.completed"
+    assert mock_responses_store.store_response_object.call_count == 0
+    mock_responses_store.cache_ephemeral.assert_called_once()
+    call = mock_responses_store.cache_ephemeral.call_args
+    assert call.args[0].store is False
+    assert call.kwargs["incremental_input"] is False
+
+
 async def test_create_openai_response_does_not_mutate_request_include(openai_responses_impl, mock_inference_api):
     mock_inference_api.openai_chat_completion.return_value = fake_stream()
     request = CreateResponseRequest(
