@@ -88,10 +88,25 @@ class OpenAIResponseInputMessageContentFile(BaseModel):
         return self
 
 
+@json_schema_type
+class OpenAIResponseInputMessageContentEncrypted(BaseModel):
+    """Opaque content part used by inter-agent messages (type "agent_message").
+
+    :param encrypted_content: The message payload. The sending client owns any
+        encryption; OGX treats the value as an opaque string and forwards it to
+        the model alongside the plaintext `input_text` header.
+    :param type: Content type identifier, always "encrypted_content"
+    """
+
+    encrypted_content: str
+    type: Literal["encrypted_content"] = "encrypted_content"
+
+
 OpenAIResponseInputMessageContent = Annotated[
     OpenAIResponseInputMessageContentText
     | OpenAIResponseInputMessageContentImage
-    | OpenAIResponseInputMessageContentFile,
+    | OpenAIResponseInputMessageContentFile
+    | OpenAIResponseInputMessageContentEncrypted,
     Field(discriminator="type"),
 ]
 register_schema(OpenAIResponseInputMessageContent, name="OpenAIResponseInputMessageContent")
@@ -1649,6 +1664,30 @@ class OpenAIResponseCompaction(BaseModel):
     id: str | None = None
 
 
+@json_schema_type
+class OpenAIResponseAgentMessage(BaseModel):
+    """An inter-agent message passed as conversation input.
+
+    The Codex/OrbiterX client delivers a sub-agent's final answer (or an
+    arbitrary inter-agent message) to the receiving agent as an input item of
+    type ``agent_message`` carrying ``author``/``recipient`` and a content list
+    of ``input_text`` (plaintext header) plus ``encrypted_content`` (payload)
+    parts.
+
+    :param author: Sending agent path (e.g. "/root/repo_scout")
+    :param recipient: Receiving agent path (e.g. "/root")
+    :param content: Message content parts (plaintext header + encrypted payload)
+    :param type: Always "agent_message"
+    :param id: Optional unique identifier
+    """
+
+    author: str
+    recipient: str
+    content: list[OpenAIResponseInputMessageContent]
+    type: Literal["agent_message"] = "agent_message"
+    id: str | None = None
+
+
 OpenAIResponseInput = Annotated[
     # Responses API allows output messages to be passed in as input
     # OpenAIResponseMessage appears in both OpenAIResponseOutput (discriminated by type="message")
@@ -1660,6 +1699,7 @@ OpenAIResponseInput = Annotated[
     | OpenAIResponseInputFunctionToolCallOutput
     | OpenAIResponseMCPApprovalResponse
     | OpenAIResponseCompaction
+    | OpenAIResponseAgentMessage
     | OpenAIResponseMessage,
     Field(union_mode="left_to_right"),
 ]

@@ -33,6 +33,7 @@ from ogx_api import (
     OpenAIMessageParam,
     OpenAIResponseAnnotationFileCitation,
     OpenAIResponseCompaction,
+    OpenAIResponseAgentMessage,
     OpenAIResponseFormatJSONObject,
     OpenAIResponseFormatJSONSchema,
     OpenAIResponseFormatParam,
@@ -40,6 +41,7 @@ from ogx_api import (
     OpenAIResponseInput,
     OpenAIResponseInputFunctionToolCallOutput,
     OpenAIResponseInputMessageContent,
+    OpenAIResponseInputMessageContentEncrypted,
     OpenAIResponseInputMessageContentFile,
     OpenAIResponseInputMessageContentImage,
     OpenAIResponseInputMessageContentText,
@@ -278,6 +280,13 @@ async def convert_response_content_to_chat_content(
             )
         elif isinstance(content_part, str):
             converted_parts.append(OpenAIChatCompletionContentPartTextParam(text=content_part))
+        elif isinstance(content_part, OpenAIResponseInputMessageContentEncrypted):
+            # Opaque payload carried by inter-agent messages. OGX does not
+            # decrypt it; pass the raw value through as text so the model
+            # receives the sub-agent's message verbatim.
+            converted_parts.append(
+                OpenAIChatCompletionContentPartTextParam(text=content_part.encrypted_content)
+            )
         else:
             raise ValueError(
                 f"OGX OpenAI Responses does not yet support content type '{type(content_part)}' in this context"
@@ -374,6 +383,12 @@ async def convert_response_input_to_chat_messages(
             elif isinstance(input_item, OpenAIResponseCompaction):
                 # Convert compaction summary to an assistant message so the model sees prior context
                 messages.append(OpenAIAssistantMessageParam(content=input_item.encrypted_content))
+            elif isinstance(input_item, OpenAIResponseAgentMessage):
+                # An inter-agent message (e.g. a sub-agent's final answer) delivered
+                # to this agent. Render it as a user message so the model sees the
+                # plaintext header plus the message payload.
+                content = await convert_response_content_to_chat_content(input_item.content, files_api)
+                messages.append(OpenAIUserMessageParam(content=content))
             elif isinstance(input_item, OpenAIResponseMessage):
                 # Narrow type to OpenAIResponseMessage which has content and role attributes
                 content = await convert_response_content_to_chat_content(input_item.content, files_api)
