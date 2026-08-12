@@ -38,6 +38,7 @@ from ogx_api.inference import (
 )
 from ogx_api.openai_responses import (
     MCPListToolsTool,
+    OpenAIResponseAgentMessage,
     OpenAIResponseAnnotationFileCitation,
     OpenAIResponseInputFunctionToolCallOutput,
     OpenAIResponseInputMessageContentFile,
@@ -361,6 +362,54 @@ class TestConvertResponseInputToChatMessages:
         assert isinstance(result[3], OpenAIToolMessageParam)
         assert result[3].content == "BBB"
         assert result[3].tool_call_id == "call_456"
+
+    async def test_convert_incremental_turn_keeps_tool_result_adjacent_to_stored_call(self):
+        # Incremental turn (previous_response_id): the new input carries a
+        # function_call_output for a call whose assistant tool_calls message
+        # lives in previous_messages, followed by an agent_message delivering
+        # a sub-agent's final answer. The tool result must stay immediately
+        # after the stored assistant message — not deferred past the
+        # interleaved agent_message — or chat APIs reject the sequence.
+        previous_messages = [
+            OpenAIUserMessageParam(content="Spawn a sub-agent..."),
+            OpenAIAssistantMessageParam(
+                tool_calls=[
+                    OpenAIChatCompletionToolCall(
+                        index=0,
+                        id="call_wait",
+                        function=OpenAIChatCompletionToolCallFunction(
+                            name="wait_agent",
+                            arguments='{"timeout_ms": 120000}',
+                        ),
+                    )
+                ]
+            ),
+        ]
+        input_items = [
+            OpenAIResponseInputFunctionToolCallOutput(
+                output='{"message":"Wait completed.","timed_out":false}',
+                call_id="call_wait",
+            ),
+            OpenAIResponseAgentMessage(
+                author="/root/repo_scout",
+                recipient="/root",
+                content=[
+                    OpenAIResponseInputMessageContentText(
+                        text="Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/repo_scout\nPayload:\n"
+                    ),
+                ],
+            ),
+        ]
+
+        result = await convert_response_input_to_chat_messages(
+            input_items, previous_messages=previous_messages
+        )
+
+        # assistant(tool_calls) -> tool -> user(agent_message)
+        assert len(result) == 2
+        assert isinstance(result[0], OpenAIToolMessageParam)
+        assert result[0].tool_call_id == "call_wait"
+        assert isinstance(result[1], OpenAIUserMessageParam)
 
     async def test_convert_response_message(self):
         input_items = [

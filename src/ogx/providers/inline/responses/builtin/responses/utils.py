@@ -313,15 +313,28 @@ async def convert_response_input_to_chat_messages(
         # be added immediately following the corresponding
         # OpenAIAssistantMessageParam
         tool_call_results: dict[str, list[OpenAIMessageParam]] = {}
+        input_call_ids: set[str] = set()
         for input_item in input:
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput):
                 tool_call_results[input_item.call_id] = await _build_tool_result_messages(input_item, files_api)
+            elif isinstance(input_item, OpenAIResponseOutputMessageFunctionToolCall):
+                input_call_ids.add(input_item.call_id)
         had_tool_call_results = bool(tool_call_results)
 
         for i, input_item in enumerate(input):
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput):
-                # skip as these have been extracted and inserted in order
-                pass
+                if input_item.call_id not in input_call_ids and previous_messages is not None:
+                    # Incremental turn (previous_response_id): this output
+                    # references a function_call from an earlier response whose
+                    # assistant tool_calls message already lives in
+                    # previous_messages. Emit the tool result here, in input
+                    # order, so it stays immediately adjacent to that stored
+                    # assistant message instead of being deferred past
+                    # interleaved items (e.g. an agent_message delivering a
+                    # sub-agent's final answer), which chat APIs reject.
+                    messages.extend(tool_call_results.pop(input_item.call_id))
+                # otherwise skip: paired inline next to its own function_call
+                # below, or validated against previous_messages at the end
             elif isinstance(input_item, OpenAIResponseOutputMessageReasoningItem):
                 # skip — reasoning items are consumed by the next assistant message via look-back
                 pass
