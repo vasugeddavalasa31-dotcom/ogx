@@ -498,6 +498,10 @@ class ResponsesStore:
             where={"id": response_id},
         )
         if not row:
+            cached = _ephemeral_responses.get(response_id)
+            if cached is not None:
+                response_cache[response_id] = cached
+                return cached
             response_cache[response_id] = None
             return None
 

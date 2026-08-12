@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
 from ogx_api.common.responses import Order
+from ogx_api.common.errors import ResponseNotFoundError
 from ogx_api.openai_responses import (
     ListOpenAIResponseInputItem,
     ListOpenAIResponseObject,
@@ -287,25 +288,12 @@ async def _handle_ws_responses_turn(
 
     store = payload.get("store", True)
     previous_response_id = payload.get("previous_response_id")
-    building_on: str | None = None
 
-    # store=false chains are not persisted, so continuation is served from the
-    # connection-local cache rather than the responses store.
-    if previous_response_id is not None and store is False:
-        cached = session_cache.get(previous_response_id)
-        if cached is None:
-            await _send_ws_error(
-                websocket,
-                404,
-                "previous_response_not_found",
-                f"Previous response '{previous_response_id}' was not found.",
-                param="previous_response_id",
-            )
-            return
-        prev_input, prev_output = cached
-        payload["input"] = [*prev_input, *prev_output, *_ws_normalize_input(payload.get("input"))]
-        payload.pop("previous_response_id", None)
-        building_on = previous_response_id
+    # `store=false` responses live in the bounded in-memory ephemeral cache,
+    # which stores the full chat messages (including reasoning_content needed
+    # by DeepSeek thinking mode). Leave `previous_response_id` intact so the
+    # normal processing path reconstructs the conversation from that cache —
+    # same semantics as HTTP/SSE and as OpenAI's ephemeral continuation.
 
     sent_input = _ws_normalize_input(payload.get("input"))
 
@@ -340,23 +328,15 @@ async def _handle_ws_responses_turn(
         http_exc = try_translate_to_http_exception(exc)
         status = http_exc.status_code if http_exc else 500
         detail = http_exc.detail if http_exc else "Internal server error: An unexpected error occurred."
-        await _send_ws_error(websocket, status, "server_error", detail)
+        code = "server_error"
+        if isinstance(exc, ResponseNotFoundError):
+            code = "previous_response_not_found"
+        await _send_ws_error(websocket, status, code, detail)
 
     if failed:
-        # A failed continuation evicts the response it built on, so subsequent
-        # turns referencing it report previous_response_not_found.
-        if building_on is not None:
-            session_cache.pop(building_on, None)
-    elif final_response is not None and store is False:
-        # Only the latest response in a chain is ever needed for continuation.
-        # Evict the predecessor when extending it so a long-lived connection does
-        # not accumulate every turn's (growing) history.
-        if building_on is not None:
-            session_cache.pop(building_on, None)
-        session_cache[final_response.id] = (
-            sent_input,
-            [item.model_dump() for item in final_response.output],
-        )
+        # A failed continuation leaves the ephemeral cache untouched; the next
+        # attempt reports the same error rather than silently evicting history.
+        pass
 
 
 def create_router(impl: Responses) -> APIRouter:

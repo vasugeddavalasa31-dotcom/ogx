@@ -70,6 +70,12 @@ def test_websocket_validation_error_returns_invalid_request():
 
 def test_websocket_unknown_previous_response_not_found():
     impl = AsyncMock(spec=Responses)
+    from ogx_api import ResponseNotFoundError
+
+    async def _raise_not_found(request):
+        raise ResponseNotFoundError("resp_does_not_exist")
+
+    impl.create_openai_response.side_effect = _raise_not_found
     client = TestClient(_ws_app(impl))
 
     with client.websocket_connect("/v1/responses") as ws:
@@ -89,8 +95,10 @@ def test_websocket_unknown_previous_response_not_found():
     assert event["type"] == "error"
     assert event["status"] == 404
     assert event["error"]["code"] == "previous_response_not_found"
-    # No inference is attempted for a connection-local cache miss.
-    impl.create_openai_response.assert_not_called()
+    # A store=false continuation that isn't found in the ephemeral cache raises
+    # from the store (same as HTTP/SSE), and the WS handler turns it into a 404
+    # error envelope.
+    impl.create_openai_response.assert_called_once()
 
 
 def test_websocket_impl_exception_returns_server_error():
