@@ -121,6 +121,25 @@ class _OpenAIResponseObjectWithInputAndMessages(OpenAIResponseObjectWithInput):
     input_storage_mode: str | None = None
 
 
+# --- Ephemeral (store=false) response cache -----------------------------------
+# OpenAI lets clients continue `store=false` responses via `previous_response_id`
+# within a session. The SQL store intentionally skips store=false responses, so
+# continuations over SSE/HTTP used to 404 (only the WebSocket handler cached
+# them connection-locally). Keep the most recent ephemeral responses in memory
+# (bounded) so tool-call round-trips and incremental turns work on any transport.
+_EPHEMERAL_RESPONSE_LIMIT = 256
+_ephemeral_responses: dict[str, _OpenAIResponseObjectWithInputAndMessages] = {}
+
+
+def _cache_ephemeral_response(
+    response_id: str,
+    response: _OpenAIResponseObjectWithInputAndMessages,
+) -> None:
+    _ephemeral_responses[response_id] = response
+    while len(_ephemeral_responses) > _EPHEMERAL_RESPONSE_LIMIT:
+        _ephemeral_responses.pop(next(iter(_ephemeral_responses)))
+
+
 @dataclass(frozen=True)
 class MemoryRecord:
     """Current memory file mapping for one owner-scoped conversation."""
@@ -234,6 +253,26 @@ class ResponsesStore:
         incremental_input: bool = False,
     ) -> None:
         await self._write_response_object(response_object, input, messages, incremental_input)
+
+    def cache_ephemeral(
+        self,
+        response_object: OpenAIResponseObject,
+        input: list[OpenAIResponseInput],
+        messages: list[OpenAIMessageParam],
+        incremental_input: bool = False,
+    ) -> None:
+        """Keep a `store=false` response in memory so it can be continued.
+
+        The SQL store intentionally skips store=false responses; this bounded
+        in-memory mirror makes `previous_response_id` work across requests on
+        any transport (matching OpenAI semantics for ephemeral responses).
+        """
+        data = response_object.model_dump()
+        data["input"] = [item.model_dump() for item in input]
+        data["messages"] = [msg.model_dump() for msg in messages]
+        if incremental_input:
+            data["input_storage_mode"] = "incremental"
+        _cache_ephemeral_response(data["id"], _OpenAIResponseObjectWithInputAndMessages(**data))
 
     async def upsert_response_object(
         self,
@@ -429,6 +468,9 @@ class ResponsesStore:
         if not row:
             # SecureSqlStore will return None if record doesn't exist OR access is denied
             # This provides security by not revealing whether the record exists
+            cached = _ephemeral_responses.get(response_id)
+            if cached is not None:
+                return cached
             raise ResponseNotFoundError(response_id) from None
 
         response_data = row["response_object"]
@@ -624,9 +666,12 @@ class ResponsesStore:
             )
 
     async def delete_response_object(self, response_id: str) -> OpenAIDeleteResponseObject:
+        _ephemeral_responses.pop(response_id, None)
         row = await self.sql_store.fetch_one(self.reference.table_name, where={"id": response_id})
         if not row:
-            raise ResponseNotFoundError(response_id)
+            # Ephemeral-only (store=false) responses live in memory, not SQL —
+            # nothing persisted to delete, so report success.
+            return OpenAIDeleteResponseObject(id=response_id, object="response", deleted=True)
 
         parent_response = _OpenAIResponseObjectWithInputAndMessages(**row["response_object"])
 

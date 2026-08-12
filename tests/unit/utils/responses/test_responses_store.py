@@ -650,3 +650,38 @@ async def test_responses_store_input_items_reasoning_include_preserves_content()
         assert len(result.data) == 1
         assert get_reasoning_item(result.data[0]).content is not None
         assert get_reasoning_item(result.data[0]).content[0].text == "Reasoning content"
+
+
+
+
+async def test_store_false_response_can_be_continued_from_ephemeral_cache(tmp_path):
+    """`store=false` responses must be continuable via previous_response_id.
+
+    Regression: continuations over SSE/HTTP used to 404 because store=false
+    responses were never persisted (only WebSocket cached them connection-
+    locally). The in-memory ephemeral cache fixes that.
+    """
+    store = build_store(str(tmp_path / "store.db"))
+    await store.initialize()
+    response_id = f"resp_{uuid4().hex}"
+    created = int(time.time())
+
+    response = create_test_response_object(response_id, created)
+    response = response.model_copy(update={"store": False})
+    input_item = create_test_response_input("hi", "in_1")
+
+    # not persisted to SQL, but retrievable via the ephemeral cache
+    store.cache_ephemeral(response, [input_item], [])
+    got = await store.get_response_object(response_id)
+    assert got.id == response_id
+    assert got.store is False
+    assert got.input == [input_item]
+
+    # unknown ids still raise
+    with pytest.raises(ResponseNotFoundError):
+        await store.get_response_object(f"resp_{uuid4().hex}")
+
+    # deleting evicts from the ephemeral cache too
+    await store.delete_response_object(response_id)
+    with pytest.raises(ResponseNotFoundError):
+        await store.get_response_object(response_id)

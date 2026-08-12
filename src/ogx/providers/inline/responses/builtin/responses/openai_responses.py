@@ -1526,6 +1526,26 @@ class OpenAIResponsesImpl:
                         incremental_input=incremental,
                         is_background_response=bool(request.background),
                     )
+                elif stream_chunk.type in {"response.completed", "response.incomplete", "response.failed"}:
+                    # `store=false` responses aren't written to the SQL store, but
+                    # OpenAI still lets clients continue them via
+                    # `previous_response_id`. Keep the final snapshot in the
+                    # bounded in-memory cache so tool-call round-trips and
+                    # incremental turns work over SSE/HTTP too (not just WS).
+                    terminal_response = failed_response or final_response
+                    if terminal_response is not None:
+                        messages_to_store = list(
+                            filter(
+                                lambda x: not isinstance(x, OpenAISystemMessageParam),
+                                orchestrator.final_messages or orchestrator.ctx.messages,
+                            )
+                        )
+                        self.responses_store.cache_ephemeral(
+                            terminal_response,
+                            input_items_for_storage,
+                            messages_to_store,
+                            incremental_input=incremental,
+                        )
 
                 # Store and sync before yielding terminal events
                 # This ensures the storage/syncing happens even if the consumer breaks after receiving the event
