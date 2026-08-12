@@ -612,7 +612,11 @@ class TestReasoningSupportInConversion:
 
     When a ReasoningItem appears in the input, it should be:
     1. Skipped (not converted to its own CC message)
-    2. Attached as `reasoning=<text>` on the NEXT assistant message via _get_preceding_reasoning()
+    2. Attached as `reasoning=<text>` on the assistant message(s) that follow it
+
+    A single reasoning item can precede several parallel tool calls, so the
+    reasoning carries forward until a turn boundary (tool result, user/developer
+    message, or agent message) resets it.
 
     This applies to FunctionToolCalls, McpCalls, and ResponseMessages with role='assistant'.
     """
@@ -905,6 +909,48 @@ class TestReasoningSupportInConversion:
         assert len(result) == 3
         assert isinstance(result[1], OpenAIAssistantMessageParam)
         assert not hasattr(result[1], "reasoning")
+
+    async def test_reasoning_attached_to_each_parallel_tool_call(self):
+        """A single ReasoningItem preceding several parallel tool calls must attach
+        reasoning to every assistant message.
+
+        Regression: DeepSeek's thinking mode requires `reasoning_content` to be
+        passed back on every assistant message. The old look-back only inspected
+        the immediately preceding item, so the 2nd+ parallel tool call lost its
+        reasoning and DeepSeek rejected the request.
+        """
+        input_items = [
+            OpenAIResponseMessage(role="user", content="Spawn two sub-agents"),
+            OpenAIResponseOutputMessageReasoningItem(
+                id="rs_parallel",
+                summary=[],
+                content=[OpenAIResponseOutputMessageReasoningContent(text="Spawn both agents in parallel.")],
+                status="completed",
+            ),
+            OpenAIResponseOutputMessageFunctionToolCall(
+                call_id="call_00_A",
+                name="spawn_agent",
+                arguments='{"prompt":"alpha"}',
+            ),
+            OpenAIResponseOutputMessageFunctionToolCall(
+                call_id="call_01_B",
+                name="spawn_agent",
+                arguments='{"prompt":"beta"}',
+            ),
+            OpenAIResponseInputFunctionToolCallOutput(output="alpha", call_id="call_00_A"),
+            OpenAIResponseInputFunctionToolCallOutput(output="beta", call_id="call_01_B"),
+        ]
+
+        result = await convert_response_input_to_chat_messages(input_items)
+
+        # user, assistant(tool A + reasoning), tool(A), assistant(tool B + reasoning), tool(B)
+        assert len(result) == 5
+        assert isinstance(result[1], OpenAIAssistantMessageParam)
+        assert result[1].tool_calls[0].function.name == "spawn_agent"
+        assert result[1].reasoning_content == "Spawn both agents in parallel."
+        assert isinstance(result[3], OpenAIAssistantMessageParam)
+        assert result[3].tool_calls[0].function.name == "spawn_agent"
+        assert result[3].reasoning_content == "Spawn both agents in parallel."
 
 
 class TestExtractCitationsFromText:
