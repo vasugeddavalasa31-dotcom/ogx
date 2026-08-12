@@ -10,7 +10,9 @@ from ogx.providers.utils.inference.openai_mixin import OpenAIMixin
 from ogx_api import (
     OpenAIChatCompletion,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionChunkWithReasoning,
     OpenAIChatCompletionRequestWithExtraBody,
+    OpenAIChatCompletionWithReasoning,
     OpenAICompletion,
     OpenAICompletionRequestWithExtraBody,
     OpenAIEmbeddingsRequestWithExtraBody,
@@ -44,6 +46,36 @@ class DeepSeekInferenceAdapter(OpenAIMixin):
                 "DeepSeek does not support response_format type 'json_schema'. Use 'json_object' or 'text' instead."
             )
         return await super().openai_chat_completion(params)
+
+    async def openai_chat_completions_with_reasoning(
+        self,
+        params: OpenAIChatCompletionRequestWithExtraBody,
+    ) -> OpenAIChatCompletionWithReasoning | AsyncIterator[OpenAIChatCompletionChunkWithReasoning]:
+        """Chat completion with reasoning support for DeepSeek.
+
+        DeepSeek's thinking mode streams `reasoning_content` in each chunk
+        delta. The OpenAI SDK drops that non-standard field, so extract it here
+        and wrap the chunk in OpenAIChatCompletionChunkWithReasoning for the
+        Responses layer to emit as a reasoning item.
+        """
+        if not params.stream:
+            raise NotImplementedError("Non-streaming reasoning is not yet supported for DeepSeek")
+
+        result = await self.openai_chat_completion(params)
+        if not isinstance(result, AsyncIterator):
+            raise RuntimeError("Expected streaming response for reasoning, but got non-streaming result")
+
+        async def _wrap_chunks() -> AsyncIterator[OpenAIChatCompletionChunkWithReasoning]:
+            async for chunk in result:
+                reasoning = None
+                for choice in chunk.choices or []:
+                    reasoning = getattr(choice.delta, "reasoning_content", None)
+                yield OpenAIChatCompletionChunkWithReasoning(
+                    chunk=chunk,
+                    reasoning_content=reasoning,
+                )
+
+        return _wrap_chunks()
 
     async def openai_embeddings(
         self,

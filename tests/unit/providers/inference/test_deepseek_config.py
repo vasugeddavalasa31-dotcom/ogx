@@ -66,3 +66,61 @@ class TestDeepSeekConfig:
 
         with pytest.raises(NotImplementedError, match="does not support /v1/completions endpoint"):
             await adapter.openai_completion(params)
+
+
+class TestDeepSeekReasoning:
+    """Tests for DeepSeek thinking-mode reasoning extraction."""
+
+    async def test_reasoning_stream_extracts_reasoning_content(self):
+        """Chunks carrying DeepSeek's `reasoning_content` delta must be wrapped
+        so the Responses layer can emit reasoning items (thinking display)."""
+        from ogx_api import OpenAIChatCompletionRequestWithExtraBody
+        from ogx_api.inference.models import OpenAIChatCompletionChunkWithReasoning
+
+        config = DeepSeekImplConfig(api_key="test-key")
+        adapter = DeepSeekInferenceAdapter(config=config)
+
+        class FakeDelta:
+            reasoning_content = "Let me think..."
+
+        class FakeChoice:
+            delta = FakeDelta()
+
+        class FakeChunk:
+            id = "chunk_1"
+            created = 0
+            model = "deepseek-chat"
+            choices = [FakeChoice()]
+            service_tier = None
+            usage = None
+
+        async def fake_stream():
+            yield FakeChunk()
+
+        async def fake_chat_completion(params):  # noqa: ANN001
+            return fake_stream()
+
+        params = OpenAIChatCompletionRequestWithExtraBody(
+            model="deepseek-chat", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+        adapter.openai_chat_completion = fake_chat_completion  # type: ignore[method-assign]
+
+        result = await adapter.openai_chat_completions_with_reasoning(params)
+        assert hasattr(result, "__aiter__")
+
+        chunks = [c async for c in result]
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], OpenAIChatCompletionChunkWithReasoning)
+        assert chunks[0].reasoning_content == "Let me think..."
+
+    async def test_reasoning_non_streaming_raises(self):
+        from ogx_api import OpenAIChatCompletionRequestWithExtraBody
+
+        config = DeepSeekImplConfig(api_key="test-key")
+        adapter = DeepSeekInferenceAdapter(config=config)
+        params = OpenAIChatCompletionRequestWithExtraBody(
+            model="deepseek-chat", messages=[{"role": "user", "content": "hi"}], stream=False
+        )
+
+        with pytest.raises(NotImplementedError, match="Non-streaming reasoning is not yet supported"):
+            await adapter.openai_chat_completions_with_reasoning(params)
