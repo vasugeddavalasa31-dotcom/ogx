@@ -440,7 +440,10 @@ class OpenAIResponseOutputMessageReasoningContent(BaseModel):
 class OpenAIResponseOutputMessageReasoningItem(BaseModel):
     """Reasoning output from the model, representing the model's thinking process."""
 
-    id: str = Field(description="Unique identifier for the reasoning output item.")
+    id: str | None = Field(
+        default=None,
+        description="Unique identifier for the reasoning output item. Optional on input items: clients (e.g. the OrbiterX app) echo reasoning items back into follow-up `input` without an id.",
+    )
     summary: list[OpenAIResponseOutputMessageReasoningSummary] = Field(description="Summary of the reasoning output.")
     type: Literal["reasoning"] = Field(default="reasoning", description="The type identifier, always 'reasoning'.")
     content: list[OpenAIResponseOutputMessageReasoningContent] | None = Field(
