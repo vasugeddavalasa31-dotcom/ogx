@@ -960,7 +960,10 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
     the first active inference provider (same semantics as provider_id="all" at
     startup), unless they are listed in the ``OPENCODE_GO_MODEL_IDS`` env var
     (comma-separated), in which case they are pinned to the ``opencode-go``
-    provider. Models previously synced and no longer in the list are unregistered.
+    provider. LLM models that are registered (from the static config or a
+    previous sync) but no longer in the gateway list are unregistered, so
+    disabling a model in the dashboard takes effect without a redeploy.
+    Embeddings/rerankers are never touched.
     """
     import json as _json
     import os as _os
@@ -975,50 +978,59 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
     # deployment — always pin them there (see entrypoint.sh for the boot path).
     opencode_go_model_ids.update({"deepseek-v4-flash", "deepseek-v4-pro"})
     logger.info("starting gateway model sync task", url=url, interval_seconds=interval_seconds)
-    synced_ids: set[str] = set()
 
     while True:
         try:
             with _request.urlopen(url, timeout=15) as resp:
                 data = _json.load(resp)
             wanted = {m["id"] for m in data.get("data", []) if m.get("id")}
+            logger.info("gateway model sync: fetched gateway models", count=len(wanted), models=sorted(wanted))
 
             provider_ids = list(getattr(models_api, "impls_by_provider_id", {}).keys())
             if not provider_ids:
                 logger.warning("gateway model sync: no active inference providers")
             else:
                 first_provider = provider_ids[0]
-                # Gateway-managed mode: reconcile the registry to the gateway
-                # list. Any LLM model registered from the static config or a
-                # previous sync that is no longer in the gateway list (disabled
-                # in the dashboard) is unregistered, so dashboard changes take
-                # effect within one sync interval instead of persisting until a
-                # redeploy. Embeddings/rerankers are preserved.
-                if getattr(models_api, "gateway_managed", False):
-                    try:
-                        existing = await models_api.get_all_with_type("model")
-                        for model in existing:
-                            if getattr(model, "model_type", None) != ModelType.llm:
-                                continue
-                            # Compare bare ids so provider-prefixed duplicates
-                            # (e.g. opencode-go/kimi-k3) are removed too.
-                            bare_id = model.identifier.rsplit("/", 1)[-1]
-                            if bare_id in wanted:
-                                continue
-                            logger.info(
-                                "gateway model sync: removing model not in gateway list",
-                                model=model.identifier,
-                            )
-                            await models_api.unregister_model(model.identifier)
-                    except Exception as exc:
-                        logger.warning("gateway model sync: reconcile remove failed", error=str(exc))
+                existing = await models_api.get_all_with_type("model")
+                existing_llm = [
+                    m for m in existing if getattr(m, "model_type", None) == ModelType.llm
+                ]
+                existing_bare_ids = {
+                    m.identifier.rsplit("/", 1)[-1] for m in existing_llm
+                }
 
+                # Gateway-managed mode: reconcile the registry to the gateway
+                # list. Any LLM model no longer listed (disabled in the
+                # dashboard) is unregistered. A transient empty gateway
+                # response (redeploy/worker blip) must never wipe the
+                # registry, so skip reconciliation until the list is non-empty.
+                if getattr(models_api, "gateway_managed", False) and wanted:
+                    for model in existing_llm:
+                        bare_id = model.identifier.rsplit("/", 1)[-1]
+                        if bare_id in wanted:
+                            continue
+                        logger.info(
+                            "gateway model sync: removing model not in gateway list",
+                            model=model.identifier,
+                        )
+                        try:
+                            await models_api.unregister_model(model.identifier)
+                        except Exception as exc:
+                            logger.warning(
+                                "gateway model sync: reconcile remove failed",
+                                model=model.identifier,
+                                error=str(exc),
+                            )
+                elif getattr(models_api, "gateway_managed", False):
+                    logger.warning("gateway model sync: empty gateway list, skipping reconciliation")
+
+                # Ensure every gateway-listed model is registered. Runs every
+                # cycle (no seen-set) so a model wiped by a previous bad
+                # reconciliation is re-registered on the next cycle.
                 for model_id in sorted(wanted):
-                    if model_id in synced_ids:
+                    if model_id in existing_bare_ids:
                         continue
                     try:
-                        if await models_api.has_model(model_id):
-                            continue
                         provider_id = (
                             "opencode-go" if model_id in opencode_go_model_ids else first_provider
                         )
@@ -1036,18 +1048,6 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                         logger.info("gateway model sync: registered", model_id=model_id, provider_id=provider_id)
                     except Exception as exc:
                         logger.warning("gateway model sync: register failed", model_id=model_id, error=str(exc))
-
-                for model_id in list(synced_ids):
-                    if model_id in wanted:
-                        continue
-                    try:
-                        await models_api.unregister_model(model_id)
-                        logger.info("gateway model sync: unregistered", model_id=model_id)
-                    except Exception as exc:
-                        logger.warning("gateway model sync: unregister failed", model_id=model_id, error=str(exc))
-                    synced_ids.discard(model_id)
-
-            synced_ids.update(wanted)
         except Exception as exc:
             logger.warning("gateway model sync cycle failed", error=str(exc))
 
