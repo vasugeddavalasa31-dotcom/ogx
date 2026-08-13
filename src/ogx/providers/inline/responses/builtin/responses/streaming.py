@@ -1342,7 +1342,11 @@ class StreamingResponseOrchestrator:
                             # Emit output_item.added event for the new function call
                             self.sequence_number += 1
                             is_mcp_tool = tool_call.function.name and tool_call.function.name in self.mcp_tool_to_server
-                            if not is_mcp_tool and tool_call.function.name not in _SERVER_SIDE_BUILTIN_TOOL_NAMES:
+                            if (
+                                not is_mcp_tool
+                                and not self._is_custom_tool(tool_call.function.name if tool_call.function else None)
+                                and tool_call.function.name not in _SERVER_SIDE_BUILTIN_TOOL_NAMES
+                            ):
                                 # for MCP tools (and even other non-function tools) we emit an output message item later
                                 function_call_item = OpenAIResponseOutputMessageFunctionToolCall(
                                     arguments="",  # Will be filled incrementally via delta events
@@ -1365,7 +1369,12 @@ class StreamingResponseOrchestrator:
 
                             # Check if this is an MCP tool call
                             is_mcp_tool = tool_call.function.name and tool_call.function.name in self.mcp_tool_to_server
-                            if is_mcp_tool:
+                            if self._is_custom_tool(tool_call.function.name):
+                                # Custom tool input is emitted by _coordinate_tool_execution
+                                # (custom_tool_call_input.delta) after streaming, since the
+                                # chat-completion provider delivers it as a single JSON argument.
+                                pass
+                            elif is_mcp_tool:
                                 # Emit MCP-specific argument delta event
                                 yield OpenAIResponseObjectStreamResponseMcpCallArgumentsDelta(
                                     delta=tool_call.function.arguments,
