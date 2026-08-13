@@ -863,6 +863,12 @@ class Stack:
         if models_api is None:
             return
 
+        # Gateway-managed mode: the registry is driven by registered_resources +
+        # the gateway sync task below. Disable provider auto-discovery so the
+        # dashboard lists only enabled models, not every model a provider serves.
+        if hasattr(models_api, "gateway_managed"):
+            models_api.gateway_managed = True
+
         global GATEWAY_MODEL_SYNC_TASK
         interval = server_cfg.gateway_models_sync_interval_seconds
         GATEWAY_MODEL_SYNC_TASK = asyncio.create_task(
@@ -979,6 +985,26 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 logger.warning("gateway model sync: no active inference providers")
             else:
                 first_provider = provider_ids[0]
+                # Gateway-managed mode: purge provider auto-discovered models
+                # (source=listed_from_provider, e.g. opencode-go/kimi-k3,
+                # openai/deepseek-*) so the dashboard shows only the enabled
+                # models that this sync registers as bare ids. Prefixed
+                # requests still route via fallback lookup.
+                if getattr(models_api, "gateway_managed", False):
+                    try:
+                        from ogx.core.datatypes import RegistryEntrySource
+
+                        existing = await models_api.get_all_with_type("model")
+                        for model in existing:
+                            if model.source == RegistryEntrySource.listed_from_provider:
+                                logger.info(
+                                    "gateway model sync: purging provider-listed model",
+                                    model=model.identifier,
+                                )
+                                await models_api.unregister_model(model.identifier)
+                    except Exception as exc:
+                        logger.warning("gateway model sync: purge failed", error=str(exc))
+
                 for model_id in sorted(wanted):
                     if model_id in synced_ids:
                         continue

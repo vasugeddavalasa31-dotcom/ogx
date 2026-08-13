@@ -43,6 +43,12 @@ class ModelsRoutingTable(CommonRoutingTableImpl, Models):
 
     listed_providers: set[str] = set()
 
+    # When True (set by the stack when server.gateway_models_url is configured),
+    # the registry is driven only by registered_resources + the gateway model
+    # sync task. Provider auto-discovery is skipped so the dashboard lists only
+    # enabled models instead of every model each provider happens to serve.
+    gateway_managed: bool = False
+
     async def _resolve_auto_model(self, provider_id: str, model_type: ModelType) -> str:
         """Resolve provider_model_id="auto" to an actual model from the provider.
 
@@ -88,6 +94,13 @@ class ModelsRoutingTable(CommonRoutingTableImpl, Models):
         return selected_model.provider_resource_id
 
     async def refresh(self) -> None:
+        # Gateway-managed deployments source their model list from the gateway
+        # (dashboard -> gateway -> OGX sync). Auto-discovering every provider
+        # model here would pollute the registry/dashboard with models the admin
+        # never enabled, so skip it.
+        if self.gateway_managed:
+            return
+
         for provider_id, provider in self.impls_by_provider_id.items():
             refresh = await provider.should_refresh_models()
             refresh = refresh or provider_id not in self.listed_providers
