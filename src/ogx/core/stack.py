@@ -952,11 +952,19 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
 
     Models present in the gateway list are registered as unprefixed aliases on
     the first active inference provider (same semantics as provider_id="all" at
-    startup). Models previously synced and no longer in the list are unregistered.
+    startup), unless they are listed in the ``OPENCODE_GO_MODEL_IDS`` env var
+    (comma-separated), in which case they are pinned to the ``opencode-go``
+    provider. Models previously synced and no longer in the list are unregistered.
     """
     import json as _json
+    import os as _os
     import urllib.request as _request
 
+    opencode_go_model_ids = {
+        mid.strip()
+        for mid in _os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
+        if mid.strip()
+    }
     logger.info("starting gateway model sync task", url=url, interval_seconds=interval_seconds)
     synced_ids: set[str] = set()
 
@@ -977,16 +985,21 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                     try:
                         if await models_api.has_model(model_id):
                             continue
+                        provider_id = (
+                            "opencode-go" if model_id in opencode_go_model_ids else first_provider
+                        )
                         await models_api.register_model(
                             RegisterModelRequest(
                                 model_id=model_id,
-                                provider_id=first_provider,
-                                provider_model_id="auto",
+                                provider_id=provider_id,
+                                # Pin the provider model id (not "auto") so each
+                                # alias resolves to the exact provider model.
+                                provider_model_id=model_id,
                                 model_type=ModelType.llm,
                                 metadata={"_unprefixed_alias": True},
                             )
                         )
-                        logger.info("gateway model sync: registered", model_id=model_id)
+                        logger.info("gateway model sync: registered", model_id=model_id, provider_id=provider_id)
                     except Exception as exc:
                         logger.warning("gateway model sync: register failed", model_id=model_id, error=str(exc))
 

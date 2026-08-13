@@ -21,6 +21,14 @@ providers:
         network:
           tls:
             verify: true
+    - provider_id: opencode-go
+      provider_type: remote::openai
+      config:
+        api_key: ${env.OPENCODE_GO_API_KEY:=}
+        base_url: https://opencode.ai/zen/go/v1
+        network:
+          tls:
+            verify: true
     - provider_id: sentence-transformers
       provider_type: inline::sentence-transformers
       config:

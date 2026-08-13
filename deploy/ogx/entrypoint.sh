@@ -30,17 +30,28 @@ if gateway_models_url:
             m for m in _data.get("data", []) if m.get("id")
         ]
         if _models:
+            # Models listed in OPENCODE_GO_MODEL_IDS (comma-separated) are
+            # served by the OpenCode Go provider (https://opencode.ai/zen/go/v1)
+            # and must be pinned to it. Everything else defaults to provider_id
+            # "all" (first inference provider = DeepSeek). Without this, a
+            # dashboard-added OpenCode Go model would be sent to DeepSeek and
+            # fail.
+            opencode_go_model_ids = {
+                mid.strip()
+                for mid in os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
+                if mid.strip()
+            }
             cfg["registered_resources"]["models"] = [
                 {
                     "metadata": {},
                     "model_id": m["id"],
-                    "provider_id": "all",
                     # Pin the provider model id instead of "auto": "auto"
                     # resolves every alias to the provider's *first* listed
                     # model, so e.g. deepseek-v4-pro would silently run
                     # deepseek-v4-flash. Here the gateway/TiDB model ids are
-                    # the DeepSeek provider ids, so they map 1:1.
+                    # the provider ids, so they map 1:1.
                     "provider_model_id": m["id"],
+                    "provider_id": "opencode-go" if m["id"] in opencode_go_model_ids else "all",
                     "model_type": "llm",
                 }
                 for m in _models
@@ -50,6 +61,11 @@ if gateway_models_url:
                 f"{[m['id'] for m in _models]}",
                 flush=True,
             )
+            if opencode_go_model_ids:
+                print(
+                    f"OpenCode Go models routed to opencode-go provider: {sorted(opencode_go_model_ids)}",
+                    flush=True,
+                )
     except Exception as _exc:
         print(
             f"WARNING: failed to fetch models from gateway ({_exc}); using static model list",
