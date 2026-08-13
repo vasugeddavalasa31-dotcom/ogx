@@ -812,6 +812,16 @@ class Stack:
             internal_impls,
         )
 
+        # Gateway-managed mode: the model registry is driven by the static
+        # config plus the gateway sync task. Flag it BEFORE refresh_registry_once
+        # below runs so provider auto-discovery never registers every model a
+        # provider serves (the dashboard/OGX UI would otherwise list models that
+        # were never enabled). Mirrors create_gateway_model_sync_task().
+        if self.run_config.server.gateway_models_url:
+            models_api = impls.get(Api.models)
+            if models_api is not None and hasattr(models_api, "gateway_managed"):
+                models_api.gateway_managed = True
+
         await register_resources(self.run_config, impls)
         await auto_register_tool_groups(self.run_config, impls)
         await register_connectors(self.run_config, impls)
