@@ -226,6 +226,13 @@ registered_resources:
       provider_id: all
       provider_model_id: deepseek-v4-pro
       model_type: llm
+    # OpenCode Go models are pinned to the opencode-go provider so requests
+    # route to https://opencode.ai/zen/go/v1 instead of the first provider.
+    - metadata: {}
+      model_id: kimi-k3
+      provider_id: opencode-go
+      provider_model_id: kimi-k3
+      model_type: llm
   vector_stores: []
 server:
   port: 8321
