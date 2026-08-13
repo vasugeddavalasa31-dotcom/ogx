@@ -43,7 +43,10 @@ if gateway_models_url:
             }
             cfg["registered_resources"]["models"] = [
                 {
-                    "metadata": {},
+                    # `_unprefixed_alias` registers the model under its bare id
+                    # (matching what the app sends) instead of a provider-prefixed
+                    # id like opencode-go/kimi-k3.
+                    "metadata": {"_unprefixed_alias": True},
                     "model_id": m["id"],
                     # Pin the provider model id instead of "auto": "auto"
                     # resolves every alias to the provider's *first* listed

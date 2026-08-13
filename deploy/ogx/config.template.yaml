@@ -228,7 +228,9 @@ registered_resources:
       model_type: llm
     # OpenCode Go models are pinned to the opencode-go provider so requests
     # route to https://opencode.ai/zen/go/v1 instead of the first provider.
-    - metadata: {}
+    # `_unprefixed_alias` makes the model registered under its bare id
+    # (kimi-k3), matching what the app sends.
+    - metadata: {_unprefixed_alias: true}
       model_id: kimi-k3
       provider_id: opencode-go
       provider_model_id: kimi-k3
