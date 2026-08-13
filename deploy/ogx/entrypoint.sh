@@ -17,8 +17,12 @@ for p in cfg["providers"]["inference"]:
 # Optional: source the LLM model list from the gateway (which reads the TiDB
 # admin_model registry). This makes OGX serve exactly the models enabled in the
 # gateway instead of the hard-coded list in config.template.yaml. Falls back to
-# the static list when the gateway is unreachable.
+# the static list when the gateway is unreachable. Defaults to the production
+# gateway so enable/disable in the admin dashboard propagates to OGX even when
+# the env var is not set on the Railway service.
 gateway_models_url = os.environ.get("GATEWAY_MODELS_URL", "").strip()
+if not gateway_models_url:
+    gateway_models_url = "https://railway-gateway-production.up.railway.app/v1/models"
 if gateway_models_url:
     try:
         import json as _json

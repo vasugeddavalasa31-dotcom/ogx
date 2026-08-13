@@ -988,25 +988,30 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 logger.warning("gateway model sync: no active inference providers")
             else:
                 first_provider = provider_ids[0]
-                # Gateway-managed mode: purge provider auto-discovered models
-                # (source=listed_from_provider, e.g. opencode-go/kimi-k3,
-                # openai/deepseek-*) so the dashboard shows only the enabled
-                # models that this sync registers as bare ids. Prefixed
-                # requests still route via fallback lookup.
+                # Gateway-managed mode: reconcile the registry to the gateway
+                # list. Any LLM model registered from the static config or a
+                # previous sync that is no longer in the gateway list (disabled
+                # in the dashboard) is unregistered, so dashboard changes take
+                # effect within one sync interval instead of persisting until a
+                # redeploy. Embeddings/rerankers are preserved.
                 if getattr(models_api, "gateway_managed", False):
                     try:
-                        from ogx.core.datatypes import RegistryEntrySource
-
                         existing = await models_api.get_all_with_type("model")
                         for model in existing:
-                            if model.source == RegistryEntrySource.listed_from_provider:
-                                logger.info(
-                                    "gateway model sync: purging provider-listed model",
-                                    model=model.identifier,
-                                )
-                                await models_api.unregister_model(model.identifier)
+                            if getattr(model, "model_type", None) != ModelType.llm:
+                                continue
+                            # Compare bare ids so provider-prefixed duplicates
+                            # (e.g. opencode-go/kimi-k3) are removed too.
+                            bare_id = model.identifier.rsplit("/", 1)[-1]
+                            if bare_id in wanted:
+                                continue
+                            logger.info(
+                                "gateway model sync: removing model not in gateway list",
+                                model=model.identifier,
+                            )
+                            await models_api.unregister_model(model.identifier)
                     except Exception as exc:
-                        logger.warning("gateway model sync: purge failed", error=str(exc))
+                        logger.warning("gateway model sync: reconcile remove failed", error=str(exc))
 
                 for model_id in sorted(wanted):
                     if model_id in synced_ids:

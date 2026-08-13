@@ -213,21 +213,19 @@ storage:
       backend: sql_default
 registered_resources:
   models:
-    # provider_model_id must be pinned explicitly: "auto" resolves every alias
-    # to the provider's *first* listed model. DeepSeek v4 models are served
-    # via the OpenCode Go provider (https://opencode.ai/zen/go/v1) in this
-    # deployment — pinned here so requests don't route to the direct DeepSeek
-    # API. `_unprefixed_alias` registers each model under its bare id
-    # (deepseek-v4-flash), matching what the app sends.
+    # Static fallback used only when the gateway model list can't be fetched at
+    # boot (see entrypoint.sh). Keep this in sync with the admin dashboard;
+    # the runtime gateway sync reconciles to the dashboard list every few
+    # minutes and adds/removes models from the TiDB registry.
+    # DeepSeek v4 models are served via the OpenCode Go provider
+    # (https://opencode.ai/zen/go/v1) in this deployment — pinned here so
+    # requests don't route to the direct DeepSeek API. `_unprefixed_alias`
+    # registers each model under its bare id (deepseek-v4-flash), matching
+    # what the app sends.
     - metadata: {_unprefixed_alias: true}
       model_id: deepseek-v4-flash
       provider_id: opencode-go
       provider_model_id: deepseek-v4-flash
-      model_type: llm
-    - metadata: {_unprefixed_alias: true}
-      model_id: deepseek-v4-pro
-      provider_id: opencode-go
-      provider_model_id: deepseek-v4-pro
       model_type: llm
   vector_stores: []
 server:
