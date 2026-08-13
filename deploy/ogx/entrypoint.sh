@@ -23,6 +23,11 @@ for p in cfg["providers"]["inference"]:
 gateway_models_url = os.environ.get("GATEWAY_MODELS_URL", "").strip()
 if not gateway_models_url:
     gateway_models_url = "https://railway-gateway-production.up.railway.app/v1/models"
+else:
+    # The env var may be a bare origin (the health endpoint); the model sync
+    # needs the /v1/models path.
+    _gw_base = gateway_models_url.rstrip("/")
+    gateway_models_url = _gw_base if _gw_base.endswith("/v1/models") else _gw_base + "/v1/models"
 if gateway_models_url:
     try:
         import json as _json

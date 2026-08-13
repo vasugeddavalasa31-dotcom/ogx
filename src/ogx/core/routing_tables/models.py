@@ -94,13 +94,6 @@ class ModelsRoutingTable(CommonRoutingTableImpl, Models):
         return selected_model.provider_resource_id
 
     async def refresh(self) -> None:
-        # Gateway-managed deployments source their model list from the gateway
-        # (dashboard -> gateway -> OGX sync). Auto-discovering every provider
-        # model here would pollute the registry/dashboard with models the admin
-        # never enabled, so skip it.
-        if self.gateway_managed:
-            return
-
         for provider_id, provider in self.impls_by_provider_id.items():
             refresh = await provider.should_refresh_models()
             refresh = refresh or provider_id not in self.listed_providers
@@ -120,6 +113,16 @@ class ModelsRoutingTable(CommonRoutingTableImpl, Models):
             self.listed_providers.add(provider_id)
             if models is None:
                 continue
+
+            # Gateway-managed deployments drive LLM models from the gateway sync
+            # (dashboard -> gateway -> OGX), so auto-discovery must NOT register
+            # every provider LLM. Non-LLM models (embeddings, rerankers) still
+            # come from the providers themselves — without them vector-store
+            # validation and retrieval break.
+            if self.gateway_managed:
+                models = [m for m in models if m.model_type != ModelType.llm]
+                if not models:
+                    continue
 
             await self.update_registered_models(provider_id, models)
 

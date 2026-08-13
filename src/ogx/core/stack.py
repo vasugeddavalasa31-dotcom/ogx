@@ -1004,6 +1004,10 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
     # DeepSeek v4 models are served via the OpenCode Go provider in this
     # deployment — always pin them there (see entrypoint.sh for the boot path).
     opencode_go_model_ids.update({"deepseek-v4-flash", "deepseek-v4-pro"})
+    # The configured URL may be a bare origin (health endpoint); the model list
+    # lives under /v1/models.
+    _base = url.rstrip("/")
+    url = _base if _base.endswith("/v1/models") else _base + "/v1/models"
     logger.info("starting gateway model sync task", url=url, interval_seconds=interval_seconds)
 
     while True:
