@@ -1174,6 +1174,13 @@ class StreamingResponseOrchestrator:
         reasoning_item_id = f"rs_{uuid.uuid4()}"
         # Track tool call items for streaming events
         tool_call_item_ids: dict[int, str] = {}
+        # Indexes of tool calls that target OrbiterX custom/freeform tools.
+        # Streaming argument deltas for custom tools are emitted by
+        # _coordinate_tool_execution (custom_tool_call_input.delta) after
+        # streaming, so the per-chunk function_call_arguments.delta events must
+        # be skipped here. Tracked by index because later delta chunks don't
+        # repeat the tool name.
+        custom_tool_call_indexes: set[int] = set()
         # Track content parts for streaming events
         message_item_added_emitted = False
         content_part_emitted = False
@@ -1338,6 +1345,8 @@ class StreamingResponseOrchestrator:
                             # Create item ID for this tool call for streaming events
                             tool_call_item_id = f"fc_{uuid.uuid4()}"
                             tool_call_item_ids[tool_call.index] = tool_call_item_id
+                            if self._is_custom_tool(tool_call.function.name if tool_call.function else None):
+                                custom_tool_call_indexes.add(tool_call.index)
 
                             # Emit output_item.added event for the new function call
                             self.sequence_number += 1
@@ -1369,7 +1378,7 @@ class StreamingResponseOrchestrator:
 
                             # Check if this is an MCP tool call
                             is_mcp_tool = tool_call.function.name and tool_call.function.name in self.mcp_tool_to_server
-                            if self._is_custom_tool(tool_call.function.name):
+                            if tool_call.index in custom_tool_call_indexes:
                                 # Custom tool input is emitted by _coordinate_tool_execution
                                 # (custom_tool_call_input.delta) after streaming, since the
                                 # chat-completion provider delivers it as a single JSON argument.
