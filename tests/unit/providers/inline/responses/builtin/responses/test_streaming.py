@@ -165,7 +165,7 @@ class TestAllDeferredOrDenied:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(approvals) == 1
         assert len(result_messages) == 2
@@ -184,7 +184,7 @@ class TestAllDeferredOrDenied:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(approvals) == 3
         assert len(result_messages) == 2, (
@@ -205,7 +205,7 @@ class TestAllDeferredOrDenied:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(approvals) == 2
         assert "user_msg" in result_messages
@@ -227,7 +227,7 @@ class TestAllDeferredOrDenied:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, _, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(approvals) == 0
         assert len(result_messages) == 2
@@ -258,7 +258,7 @@ class TestMixedApproval:
         response = _make_response([tc_weather, tc_time])
         messages = ["system_msg", "user_msg"]
 
-        _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(non_function) == 1
         assert non_function[0].id == "call_1"
@@ -286,7 +286,7 @@ class TestMixedApproval:
         response = _make_response([tc_weather, tc_time, tc_news])
         messages = ["system_msg", "user_msg"]
 
-        _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(non_function) == 2
         assert len(approvals) == 1
@@ -320,7 +320,7 @@ class TestMixedApproval:
         response = _make_response([tc_weather, tc_time])
         messages = ["system_msg", "user_msg"]
 
-        _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(non_function) == 1
         assert len(approvals) == 0
@@ -353,7 +353,7 @@ class TestMixedApproval:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, _, _, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, _, _, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert result_messages[0] == "system_msg"
         assert result_messages[1] == "user_msg"
@@ -374,7 +374,7 @@ class TestAllExecuted:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(non_function) == 2
         assert len(approvals) == 0
@@ -400,7 +400,7 @@ class TestAllExecuted:
         response = _make_response(tool_calls)
         messages = ["system_msg", "user_msg"]
 
-        _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+        _, _, non_function, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
 
         assert len(non_function) == 2
         assert len(approvals) == 0
@@ -635,3 +635,88 @@ class TestReasoningEventOrdering:
         assert done[-1].item.type == "reasoning"
         assert done[-1].item.id == "reasoning-1"
         assert done[-1].item.status == "completed"
+
+
+class TestCustomToolCalls:
+    """Custom/freeform tools (e.g. apply_patch) are surfaced to the client as
+    custom_tool_call items, not function_call items."""
+
+    def _orchestrator_with_custom(self, custom_names: list[str]):
+        orch = _build_orchestrator({})
+        from ogx_api.openai_responses import OpenAIResponseInputToolCustom
+
+        orch.ctx.response_tools = [
+            OpenAIResponseInputToolCustom(type="custom", name=name) for name in custom_names
+        ]
+        return orch
+
+    def test_separate_tool_calls_routes_custom_tool_to_custom_list(self):
+        orch = self._orchestrator_with_custom(["apply_patch"])
+        tool_calls = [
+            OpenAIChatCompletionToolCall(
+                id="call_1",
+                function=OpenAIChatCompletionToolCallFunction(
+                    name="apply_patch", arguments='{"input": "*** Begin Patch\\n...\\n*** End Patch"}'
+                ),
+            ),
+            OpenAIChatCompletionToolCall(
+                id="call_2",
+                function=OpenAIChatCompletionToolCallFunction(
+                    name="shell", arguments='{"command": "ls"}'
+                ),
+            ),
+        ]
+        response = _make_response(tool_calls)
+        messages = ["system_msg", "user_msg"]
+
+        funcs, customs, non_func, approvals, result_messages, _ = orch._separate_tool_calls(response, messages)
+
+        assert [c.function.name for c in customs] == ["apply_patch"]
+        assert [c.function.name for c in funcs] == ["shell"]
+        assert non_func == []
+        assert approvals == []
+
+    async def test_coordinate_tool_execution_emits_custom_tool_call_item(self):
+        orch = self._orchestrator_with_custom(["apply_patch"])
+        orch.response_id = "resp_1"
+        orch.sequence_number = 0
+        orch.max_tool_calls = None
+        orch.accumulated_builtin_tool_calls = 0
+
+        custom_calls = [
+            OpenAIChatCompletionToolCall(
+                id="call_1",
+                function=OpenAIChatCompletionToolCallFunction(
+                    name="apply_patch", arguments='{"input": "*** Begin Patch\\n...\\n*** End Patch"}'
+                ),
+            )
+        ]
+        output_messages = []
+
+        events = [
+            ev
+            async for ev in orch._coordinate_tool_execution(
+                function_tool_calls=[],
+                custom_tool_calls=custom_calls,
+                non_function_tool_calls=[],
+                completion_result_data=MagicMock(tool_call_item_ids={}, tool_calls={}),
+                output_messages=output_messages,
+                next_turn_messages=[],
+            )
+        ]
+
+        event_types = [e.type for e in events]
+        assert event_types == [
+            "response.output_item.added",
+            "response.custom_tool_call_input.delta",
+            "response.custom_tool_call_input.done",
+            "response.output_item.done",
+        ]
+        # The emitted item must be a custom_tool_call with the raw input.
+        added = events[0]
+        assert added.item.type == "custom_tool_call"
+        assert added.item.name == "apply_patch"
+        assert added.item.input == "*** Begin Patch\n...\n*** End Patch"
+        # The output_messages list must contain the completed item.
+        assert output_messages[-1].type == "custom_tool_call"
+        assert output_messages[-1].status == "completed"

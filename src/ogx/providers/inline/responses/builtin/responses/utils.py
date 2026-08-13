@@ -5,6 +5,7 @@
 # the root directory of this source tree.
 
 import base64
+import json
 import mimetypes
 import re
 import uuid
@@ -25,20 +26,20 @@ from ogx_api import (
     OpenAIChatCompletionToolCallFunction,
     OpenAIChatCompletionUsage,
     OpenAIChoice,
-    OpenAIDeveloperMessageParam,
     OpenAIFile,
     OpenAIFileFile,
     OpenAIImageURL,
     OpenAIJSONSchema,
     OpenAIMessageParam,
+    OpenAIResponseAgentMessage,
     OpenAIResponseAnnotationFileCitation,
     OpenAIResponseCompaction,
-    OpenAIResponseAgentMessage,
     OpenAIResponseFormatJSONObject,
     OpenAIResponseFormatJSONSchema,
     OpenAIResponseFormatParam,
     OpenAIResponseFormatText,
     OpenAIResponseInput,
+    OpenAIResponseInputCustomToolCallOutput,
     OpenAIResponseInputFunctionToolCallOutput,
     OpenAIResponseInputMessageContent,
     OpenAIResponseInputMessageContentEncrypted,
@@ -51,6 +52,7 @@ from ogx_api import (
     OpenAIResponseMessage,
     OpenAIResponseOutputMessageContent,
     OpenAIResponseOutputMessageContentOutputText,
+    OpenAIResponseOutputMessageCustomToolCall,
     OpenAIResponseOutputMessageFileSearchToolCall,
     OpenAIResponseOutputMessageFunctionToolCall,
     OpenAIResponseOutputMessageMCPCall,
@@ -136,21 +138,21 @@ async def convert_chat_choice_to_response_message(
 
 
 async def _build_tool_result_messages(
-    input_item: OpenAIResponseInputFunctionToolCallOutput,
+    call_id: str,
+    output: str | list[OpenAIResponseInputMessageContent],
     files_api: Files | None,
 ) -> list[OpenAIMessageParam]:
-    """Convert a function_call_output into chat messages.
+    """Convert a function_call_output/custom_tool_call_output into chat messages.
 
     OpenAIToolMessageParam only accepts text content, so image parts are
     placed in a follow-up user message where vision models can see them.
     """
-    output = input_item.output
     if not isinstance(output, list):
-        return [OpenAIToolMessageParam(content=output, tool_call_id=input_item.call_id)]
+        return [OpenAIToolMessageParam(content=output, tool_call_id=call_id)]
 
     converted = await convert_response_content_to_chat_content(output, files_api=files_api)
     if not isinstance(converted, list):
-        return [OpenAIToolMessageParam(content=converted, tool_call_id=input_item.call_id)]
+        return [OpenAIToolMessageParam(content=converted, tool_call_id=call_id)]
 
     text_parts: list[OpenAIChatCompletionContentPartTextParam] = []
     image_parts: list[OpenAIChatCompletionContentPartParam] = []
@@ -165,7 +167,7 @@ async def _build_tool_result_messages(
     messages: list[OpenAIMessageParam] = [
         OpenAIToolMessageParam(
             content=text_parts or [OpenAIChatCompletionContentPartTextParam(text="[image]")],
-            tool_call_id=input_item.call_id,
+            tool_call_id=call_id,
         )
     ]
     if image_parts:
@@ -308,7 +310,7 @@ async def convert_response_input_to_chat_messages(
     """
     messages: list[OpenAIMessageParam] = []
     if isinstance(input, list):
-        # extract all OpenAIResponseInputFunctionToolCallOutput items
+        # extract all function/custom tool call output items
         # so their corresponding OpenAIToolMessageParam instances can
         # be added immediately following the corresponding
         # OpenAIAssistantMessageParam
@@ -316,8 +318,16 @@ async def convert_response_input_to_chat_messages(
         input_call_ids: set[str] = set()
         for input_item in input:
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput):
-                tool_call_results[input_item.call_id] = await _build_tool_result_messages(input_item, files_api)
+                tool_call_results[input_item.call_id] = await _build_tool_result_messages(
+                    input_item.call_id, input_item.output, files_api
+                )
+            elif isinstance(input_item, OpenAIResponseInputCustomToolCallOutput):
+                tool_call_results[input_item.call_id] = await _build_tool_result_messages(
+                    input_item.call_id, input_item.output, files_api
+                )
             elif isinstance(input_item, OpenAIResponseOutputMessageFunctionToolCall):
+                input_call_ids.add(input_item.call_id)
+            elif isinstance(input_item, OpenAIResponseOutputMessageCustomToolCall):
                 input_call_ids.add(input_item.call_id)
         had_tool_call_results = bool(tool_call_results)
 
@@ -329,14 +339,16 @@ async def convert_response_input_to_chat_messages(
         # messages.
         pending_reasoning: str | None = None
 
-        for i, input_item in enumerate(input):
-            if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput):
+        for input_item in input:
+            if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput) or isinstance(
+                input_item, OpenAIResponseInputCustomToolCallOutput
+            ):
                 # Tool results close out the current turn; a later assistant
                 # message (if any) is a fresh model turn with its own reasoning.
                 pending_reasoning = None
                 if input_item.call_id not in input_call_ids and previous_messages is not None:
                     # Incremental turn (previous_response_id): this output
-                    # references a function_call from an earlier response whose
+                    # references a tool call from an earlier response whose
                     # assistant tool_calls message already lives in
                     # previous_messages. Emit the tool result here, in input
                     # order, so it stays immediately adjacent to that stored
@@ -344,7 +356,7 @@ async def convert_response_input_to_chat_messages(
                     # interleaved items (e.g. an agent_message delivering a
                     # sub-agent's final answer), which chat APIs reject.
                     messages.extend(tool_call_results.pop(input_item.call_id))
-                # otherwise skip: paired inline next to its own function_call
+                # otherwise skip: paired inline next to its own tool call
                 # below, or validated against previous_messages at the end
             elif isinstance(input_item, OpenAIResponseOutputMessageReasoningItem):
                 # Capture the reasoning text for the assistant items that follow
@@ -359,6 +371,29 @@ async def convert_response_input_to_chat_messages(
                     function=OpenAIChatCompletionToolCallFunction(
                         name=input_item.name,
                         arguments=input_item.arguments,
+                    ),
+                )
+                if pending_reasoning:
+                    msg = AssistantMessageWithReasoning(
+                        tool_calls=[tool_call], reasoning_content=pending_reasoning
+                    )
+                else:
+                    msg = OpenAIAssistantMessageParam(tool_calls=[tool_call])  # type: ignore[assignment]
+                messages.append(msg)
+                if input_item.call_id in tool_call_results:
+                    messages.extend(tool_call_results[input_item.call_id])
+                    del tool_call_results[input_item.call_id]
+            elif isinstance(input_item, OpenAIResponseOutputMessageCustomToolCall):
+                # A custom tool call (e.g. apply_patch) echoed back from the
+                # client as input. The provider saw the custom tool as a plain
+                # function tool with a single `input` string parameter, so
+                # rebuild that shape here.
+                tool_call = OpenAIChatCompletionToolCall(
+                    index=0,
+                    id=input_item.call_id,
+                    function=OpenAIChatCompletionToolCallFunction(
+                        name=input_item.name,
+                        arguments=json.dumps({"input": input_item.input}),
                     ),
                 )
                 if pending_reasoning:

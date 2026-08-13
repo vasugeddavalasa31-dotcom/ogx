@@ -40,6 +40,7 @@ from ogx_api.openai_responses import (
     MCPListToolsTool,
     OpenAIResponseAgentMessage,
     OpenAIResponseAnnotationFileCitation,
+    OpenAIResponseInputCustomToolCallOutput,
     OpenAIResponseInputFunctionToolCallOutput,
     OpenAIResponseInputMessageContentFile,
     OpenAIResponseInputMessageContentImage,
@@ -50,6 +51,7 @@ from ogx_api.openai_responses import (
     OpenAIResponseInputToolWebSearch,
     OpenAIResponseMessage,
     OpenAIResponseOutputMessageContentOutputText,
+    OpenAIResponseOutputMessageCustomToolCall,
     OpenAIResponseOutputMessageFunctionToolCall,
     OpenAIResponseOutputMessageMCPCall,
     OpenAIResponseOutputMessageMCPListTools,
@@ -951,6 +953,33 @@ class TestReasoningSupportInConversion:
         assert isinstance(result[3], OpenAIAssistantMessageParam)
         assert result[3].tool_calls[0].function.name == "spawn_agent"
         assert result[3].reasoning_content == "Spawn both agents in parallel."
+
+    async def test_custom_tool_call_output_round_trips_to_tool_message(self):
+        """A custom_tool_call echoed back with its custom_tool_call_output must
+        convert to an assistant tool_calls message (with the raw input in the
+        `input` argument) followed by the tool result."""
+        input_items = [
+            OpenAIResponseMessage(role="user", content="Apply the patch"),
+            OpenAIResponseOutputMessageCustomToolCall(
+                id="ctc_1",
+                call_id="call_1",
+                name="apply_patch",
+                input="*** Begin Patch\n...\n*** End Patch",
+                status="completed",
+            ),
+            OpenAIResponseInputCustomToolCallOutput(call_id="call_1", output="patch applied"),
+        ]
+
+        result = await convert_response_input_to_chat_messages(input_items)
+
+        assert len(result) == 3
+        assert isinstance(result[0], OpenAIUserMessageParam)
+        assert isinstance(result[1], OpenAIAssistantMessageParam)
+        assert result[1].tool_calls[0].function.name == "apply_patch"
+        assert result[1].tool_calls[0].function.arguments == '{"input": "*** Begin Patch\\n...\\n*** End Patch"}'
+        assert isinstance(result[2], OpenAIToolMessageParam)
+        assert result[2].tool_call_id == "call_1"
+        assert result[2].content == "patch applied"
 
 
 class TestExtractCitationsFromText:

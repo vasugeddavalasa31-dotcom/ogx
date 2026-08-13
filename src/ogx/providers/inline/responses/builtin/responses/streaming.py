@@ -4,6 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -66,6 +67,8 @@ from ogx_api import (
     OpenAIResponseObjectStreamResponseContentPartAdded,
     OpenAIResponseObjectStreamResponseContentPartDone,
     OpenAIResponseObjectStreamResponseCreated,
+    OpenAIResponseObjectStreamResponseCustomToolCallInputDelta,
+    OpenAIResponseObjectStreamResponseCustomToolCallInputDone,
     OpenAIResponseObjectStreamResponseFailed,
     OpenAIResponseObjectStreamResponseFunctionCallArgumentsDelta,
     OpenAIResponseObjectStreamResponseFunctionCallArgumentsDone,
@@ -84,6 +87,7 @@ from ogx_api import (
     OpenAIResponseObjectStreamResponseRefusalDone,
     OpenAIResponseOutput,
     OpenAIResponseOutputMessageContentOutputText,
+    OpenAIResponseOutputMessageCustomToolCall,
     OpenAIResponseOutputMessageFileSearchToolCall,
     OpenAIResponseOutputMessageFunctionToolCall,
     OpenAIResponseOutputMessageMCPCall,
@@ -302,6 +306,10 @@ class StreamingResponseOrchestrator:
         # reasoning output item. The post-stream reasoning block in
         # create_response must not emit a duplicate reasoning item in that case.
         self.reasoning_item_streamed_inline = False
+        # Names of OrbiterX freeform/custom tools (e.g. apply_patch). The model
+        # calls them as ordinary function tools; OGX surfaces the call back to
+        # the client as a custom_tool_call item.
+        self._custom_tool_names: set[str] | None = None
         # Store MCP tool mapping that gets built during tool processing
         self.mcp_tool_to_server: dict[str, OpenAIResponseInputToolMCP] = (
             ctx.tool_context.previous_tools if ctx.tool_context else {}
@@ -325,6 +333,15 @@ class StreamingResponseOrchestrator:
         self.accumulated_builtin_tool_calls = 0
         # Track total output tokens generated across inference calls
         self.accumulated_builtin_output_tokens = 0
+
+    def _is_custom_tool(self, name: str | None) -> bool:
+        if not name:
+            return False
+        if self._custom_tool_names is None:
+            self._custom_tool_names = {
+                t.name for t in (self.ctx.response_tools or []) if t.type == "custom"
+            }
+        return name in self._custom_tool_names
 
     async def _create_refusal_response(self, violation_message: str) -> OpenAIResponseObjectStream:
         """Create a refusal response to replace streaming content."""
@@ -625,6 +642,7 @@ class StreamingResponseOrchestrator:
                 current_response = self._build_chat_completion(completion_result_data)
                 (
                     function_tool_calls,
+                    custom_tool_calls,
                     non_function_tool_calls,
                     approvals,
                     next_turn_messages,
@@ -705,6 +723,7 @@ class StreamingResponseOrchestrator:
                 # Execute tool calls and coordinate results
                 async for stream_event in self._coordinate_tool_execution(
                     function_tool_calls,
+                    custom_tool_calls,
                     non_function_tool_calls,
                     completion_result_data,
                     output_messages,
@@ -712,7 +731,12 @@ class StreamingResponseOrchestrator:
                 ):
                     yield stream_event
                 messages = next_turn_messages
-                if not function_tool_calls and not non_function_tool_calls and not has_hallucinated_retries:
+                if (
+                    not function_tool_calls
+                    and not custom_tool_calls
+                    and not non_function_tool_calls
+                    and not has_hallucinated_retries
+                ):
                     break
 
                 if has_hallucinated_retries:
@@ -728,8 +752,8 @@ class StreamingResponseOrchestrator:
                 else:
                     n_hallucinated_retries = 0
 
-                if function_tool_calls:
-                    logger.info("Exiting inference loop since there is a function (client-side) tool call")
+                if function_tool_calls or custom_tool_calls:
+                    logger.info("Exiting inference loop since there is a client-side tool call")
                     break
 
                 n_iter += 1
@@ -803,15 +827,16 @@ class StreamingResponseOrchestrator:
 
     def _separate_tool_calls(
         self, current_response, messages, reasoning_content: str | None = None
-    ) -> tuple[list, list, list, list, bool]:
-        """Separate tool calls into function and non-function categories.
+    ) -> tuple[list, list, list, list, list, bool]:
+        """Separate tool calls into function, custom, and non-function categories.
 
-        Returns (function_tool_calls, non_function_tool_calls, approvals,
-        next_turn_messages, has_hallucinated_retries).  The last flag is True
-        when the model hallucinated a tool name in a server-only loop and an
-        error was fed back — the caller should re-enter the inference loop.
+        Returns (function_tool_calls, custom_tool_calls, non_function_tool_calls,
+        approvals, next_turn_messages, has_hallucinated_retries).  The last flag
+        is True when the model hallucinated a tool name in a server-only loop and
+        an error was fed back — the caller should re-enter the inference loop.
         """
         function_tool_calls = []
+        custom_tool_calls = []
         non_function_tool_calls = []
         approvals = []
         next_turn_messages = messages.copy()
@@ -839,7 +864,13 @@ class StreamingResponseOrchestrator:
                 executed_tool_calls: list = []
                 has_deferred_or_denied = False
                 for tool_call in choice.message.tool_calls:
-                    if is_function_tool_call(tool_call, self.ctx.response_tools):
+                    if self._is_custom_tool(tool_call.function.name if tool_call.function else None):
+                        # OrbiterX freeform/custom tool (e.g. apply_patch).
+                        # OGX does not execute it; surface the call back to the
+                        # client as a custom_tool_call item.
+                        custom_tool_calls.append(tool_call)
+                        executed_tool_calls.append(tool_call)
+                    elif is_function_tool_call(tool_call, self.ctx.response_tools):
                         function_tool_calls.append(tool_call)
                         executed_tool_calls.append(tool_call)
                     elif (
@@ -915,7 +946,14 @@ class StreamingResponseOrchestrator:
                     else:
                         next_turn_messages.pop()
 
-        return function_tool_calls, non_function_tool_calls, approvals, next_turn_messages, has_hallucinated_retries
+        return (
+            function_tool_calls,
+            custom_tool_calls,
+            non_function_tool_calls,
+            approvals,
+            next_turn_messages,
+            has_hallucinated_retries,
+        )
 
     def _accumulate_chunk_usage(self, chunk: OpenAIChatCompletionChunk) -> None:
         """Accumulate usage from a streaming chunk into the response usage format."""
@@ -1554,12 +1592,13 @@ class StreamingResponseOrchestrator:
     async def _coordinate_tool_execution(
         self,
         function_tool_calls: list,
+        custom_tool_calls: list,
         non_function_tool_calls: list,
         completion_result_data: ChatCompletionResult,
         output_messages: list[OpenAIResponseOutput],
         next_turn_messages: list,
     ) -> AsyncIterator[OpenAIResponseObjectStream]:
-        """Coordinate execution of both function and non-function tool calls."""
+        """Coordinate execution of function, custom, and non-function tool calls."""
         # Execute non-function tool calls
         for tool_call in non_function_tool_calls:
             # if total calls made to built-in and mcp tools exceed max_tool_calls
@@ -1658,6 +1697,68 @@ class StreamingResponseOrchestrator:
             # Track number of calls made to built-in and mcp tools
             self.accumulated_builtin_tool_calls += 1
 
+        # Surface custom tool calls to the client (client-side freeform tools
+        # like apply_patch). Emit a custom_tool_call output item with the raw
+        # input, streamed via custom_tool_call_input.delta events so the client
+        # can render the freeform text as it arrives.
+        for tool_call in custom_tool_calls:
+            final_item_id = f"ctc_{uuid.uuid4()}"
+
+            raw_input = ""
+            if tool_call.function and tool_call.function.arguments:
+                try:
+                    parsed = json.loads(tool_call.function.arguments)
+                    if isinstance(parsed, dict):
+                        raw_input = parsed.get("input", "")
+                except json.JSONDecodeError:
+                    raw_input = tool_call.function.arguments
+
+            item = OpenAIResponseOutputMessageCustomToolCall(
+                id=final_item_id,
+                call_id=tool_call.id,
+                name=tool_call.function.name if tool_call.function else "",
+                input=raw_input,
+                status="in_progress",
+            )
+            output_messages.append(item)
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseOutputItemAdded(
+                response_id=self.response_id,
+                item=item,
+                output_index=len(output_messages) - 1,
+                sequence_number=self.sequence_number,
+            )
+
+            # Stream the freeform input in one delta (the chat-completion
+            # provider delivers custom tool input as a single JSON argument).
+            if raw_input:
+                self.sequence_number += 1
+                yield OpenAIResponseObjectStreamResponseCustomToolCallInputDelta(
+                    delta=raw_input,
+                    item_id=final_item_id,
+                    call_id=tool_call.id,
+                    output_index=len(output_messages) - 1,
+                    sequence_number=self.sequence_number,
+                )
+
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseCustomToolCallInputDone(
+                input=raw_input,
+                item_id=final_item_id,
+                call_id=tool_call.id,
+                output_index=len(output_messages) - 1,
+                sequence_number=self.sequence_number,
+            )
+
+            item.status = "completed"
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseOutputItemDone(
+                response_id=self.response_id,
+                item=item,
+                output_index=len(output_messages) - 1,
+                sequence_number=self.sequence_number,
+            )
+
         # Execute function tool calls (client-side)
         for tool_call in function_tool_calls:
             # Find the item_id for this tool call from our tracking dictionary
@@ -1750,16 +1851,29 @@ class StreamingResponseOrchestrator:
                             )
                         )
             elif input_tool.type == "custom":
-                # OrbiterX freeform/custom tool. The model calls it like a
-                # function; OGX never executes it, so surface the call back to
-                # the client as a function_call.
+                # OrbiterX freeform/custom tool (e.g. apply_patch). The model
+                # calls it like a function whose single `input` string carries
+                # the raw freeform text; OGX never executes it, so surface the
+                # call back to the client as a custom_tool_call item.
                 self.ctx.chat_tools.append(
                     ChatCompletionToolParam(
                         type="function",
                         function={
                             "name": input_tool.name,
                             "description": input_tool.description or "",
-                            "parameters": {"type": "object", "properties": {}},
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "input": {
+                                        "type": "string",
+                                        "description": (
+                                            "The raw input text for the custom tool "
+                                            "(e.g. the apply_patch diff body). Do not wrap in JSON."
+                                        ),
+                                    }
+                                },
+                                "required": ["input"],
+                            },
                         },  # type: ignore[typeddict-item,arg-type]
                     )
                 )

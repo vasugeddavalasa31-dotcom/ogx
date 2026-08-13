@@ -340,6 +340,53 @@ class OpenAIResponseOutputMessageFunctionToolCall(BaseModel):
 
 
 @json_schema_type
+class OpenAIResponseOutputMessageCustomToolCall(BaseModel):
+    """Custom tool call output message for OpenAI responses.
+
+    OrbiterX freeform tools (e.g. ``apply_patch``) arrive as ``custom`` tools
+    and are surfaced back to the caller as ``custom_tool_call`` items carrying
+    the raw input the model generated (not JSON-wrapped).
+
+    :param id: Unique identifier for the custom tool call item
+    :param call_id: Unique identifier for the tool call
+    :param name: Name of the custom tool being called
+    :param input: The raw input text passed to the custom tool
+    :param type: Tool call type identifier, always "custom_tool_call"
+    :param status: (Optional) Current status of the tool call execution
+    """
+
+    id: str
+    call_id: str
+    name: str
+    input: str
+    type: Literal["custom_tool_call"] = "custom_tool_call"
+    status: str | None = None
+
+
+@json_schema_type
+class OpenAIResponseInputCustomToolCallOutput(BaseModel):
+    """Output of a custom tool call passed back as input on the next turn.
+
+    The OrbiterX client executes ``custom_tool_call`` items locally (e.g.
+    ``apply_patch``) and echoes the result back as ``custom_tool_call_output``.
+
+    :param call_id: Unique identifier for the tool call being answered
+    :param output: The output text (or content parts) produced by the tool
+    :param type: Input item type identifier, always "custom_tool_call_output"
+    :param id: (Optional) Additional identifier for the item
+    :param name: (Optional) Name of the custom tool that produced this output
+    :param status: (Optional) Current status of the tool call execution
+    """
+
+    call_id: str
+    output: str | list[OpenAIResponseInputMessageContent]
+    type: Literal["custom_tool_call_output"] = "custom_tool_call_output"
+    id: str | None = None
+    name: str | None = None
+    status: str | None = None
+
+
+@json_schema_type
 class OpenAIResponseOutputMessageMCPCall(BaseModel):
     """Model Context Protocol (MCP) call output message for OpenAI responses.
 
@@ -459,6 +506,7 @@ OpenAIResponseOutput = Annotated[
     | OpenAIResponseOutputMessageWebSearchToolCall
     | OpenAIResponseOutputMessageFileSearchToolCall
     | OpenAIResponseOutputMessageFunctionToolCall
+    | OpenAIResponseOutputMessageCustomToolCall
     | OpenAIResponseOutputMessageMCPCall
     | OpenAIResponseOutputMessageMCPListTools
     | OpenAIResponseMCPApprovalRequest
@@ -1191,6 +1239,49 @@ class OpenAIResponseObjectStreamResponseFunctionCallArgumentsDone(BaseModel):
 
 
 @json_schema_type
+class OpenAIResponseObjectStreamResponseCustomToolCallInputDelta(BaseModel):
+    """Streaming event for incremental custom tool call input updates.
+
+    The OrbiterX client streams freeform custom tool input (e.g. an
+    ``apply_patch`` patch body) through these deltas.
+
+    :param delta: Incremental custom tool input being added
+    :param item_id: Unique identifier of the custom tool call being updated
+    :param call_id: (Optional) Unique identifier for the tool call
+    :param output_index: Index position of the item in the output list
+    :param sequence_number: Sequential number for ordering streaming events
+    :param type: Event type identifier, always "response.custom_tool_call_input.delta"
+    """
+
+    delta: str
+    item_id: str
+    call_id: str | None = None
+    output_index: int
+    sequence_number: int
+    type: Literal["response.custom_tool_call_input.delta"] = "response.custom_tool_call_input.delta"
+
+
+@json_schema_type
+class OpenAIResponseObjectStreamResponseCustomToolCallInputDone(BaseModel):
+    """Streaming event for when custom tool call input is completed.
+
+    :param input: Final complete input text for the custom tool call
+    :param item_id: Unique identifier of the completed custom tool call
+    :param call_id: (Optional) Unique identifier for the tool call
+    :param output_index: Index position of the item in the output list
+    :param sequence_number: Sequential number for ordering streaming events
+    :param type: Event type identifier, always "response.custom_tool_call_input.done"
+    """
+
+    input: str
+    item_id: str
+    call_id: str | None = None
+    output_index: int
+    sequence_number: int
+    type: Literal["response.custom_tool_call_input.done"] = "response.custom_tool_call_input.done"
+
+
+@json_schema_type
 class OpenAIResponseObjectStreamResponseWebSearchCallInProgress(BaseModel):
     """Streaming event for web search calls in progress.
 
@@ -1673,6 +1764,8 @@ OpenAIResponseObjectStream = Annotated[
     | OpenAIResponseObjectStreamResponseFileSearchCallInProgress
     | OpenAIResponseObjectStreamResponseFileSearchCallSearching
     | OpenAIResponseObjectStreamResponseFileSearchCallCompleted
+    | OpenAIResponseObjectStreamResponseCustomToolCallInputDelta
+    | OpenAIResponseObjectStreamResponseCustomToolCallInputDone
     | OpenAIResponseObjectStreamResponseIncomplete
     | OpenAIResponseObjectStreamResponseFailed
     | OpenAIResponseObjectStreamResponseCompleted
@@ -1742,6 +1835,7 @@ OpenAIResponseInput = Annotated[
     # first, then falls back to matching OpenAIResponseMessage directly.
     OpenAIResponseOutput
     | OpenAIResponseInputFunctionToolCallOutput
+    | OpenAIResponseInputCustomToolCallOutput
     | OpenAIResponseMCPApprovalResponse
     | OpenAIResponseCompaction
     | OpenAIResponseAgentMessage
