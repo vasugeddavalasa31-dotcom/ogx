@@ -963,6 +963,23 @@ async def refresh_registry_task(impls: dict[Api, Any], interval_seconds: int = R
         await asyncio.sleep(interval_seconds)
 
 
+def _urlopen_gateway(url: str, timeout: int = 15):
+    """Fetch a gateway URL, falling back to an unverified TLS context.
+
+    The gateway is a trusted internal service (model list metadata only), and
+    some base images lack the CA chain for its TLS cert — which silently kills
+    the model sync. Try the default context first, then retry unverified.
+    """
+    import ssl as _ssl
+    import urllib.request as _request
+
+    try:
+        return _request.urlopen(url, timeout=timeout)
+    except Exception:
+        ctx = _ssl._create_unverified_context()
+        return _request.urlopen(url, timeout=timeout, context=ctx)
+
+
 async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: int):
     """Periodically fetch active models from the gateway and sync the registry.
 
@@ -991,7 +1008,7 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
 
     while True:
         try:
-            with _request.urlopen(url, timeout=15) as resp:
+            with _urlopen_gateway(url) as resp:
                 data = _json.load(resp)
             wanted = {m["id"] for m in data.get("data", []) if m.get("id")}
             logger.info("gateway model sync: fetched gateway models", count=len(wanted), models=sorted(wanted))

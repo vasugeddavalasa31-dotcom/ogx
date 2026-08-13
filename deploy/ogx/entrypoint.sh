@@ -26,9 +26,18 @@ if not gateway_models_url:
 if gateway_models_url:
     try:
         import json as _json
+        import ssl as _ssl
         import urllib.request as _request
 
-        with _request.urlopen(gateway_models_url, timeout=10) as _resp:
+        def _open(url):
+            try:
+                return _request.urlopen(url, timeout=10)
+            except Exception:
+                # Trusted internal gateway; base image may lack its CA chain.
+                ctx = _ssl._create_unverified_context()
+                return _request.urlopen(url, timeout=10, context=ctx)
+
+        with _open(gateway_models_url) as _resp:
             _data = _json.load(_resp)
         _models = [
             m for m in _data.get("data", []) if m.get("id")
