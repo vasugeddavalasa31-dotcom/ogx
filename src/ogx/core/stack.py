@@ -1017,6 +1017,14 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
             with _urlopen_gateway(url) as resp:
                 data = _json.load(resp)
             wanted = {m["id"] for m in data.get("data", []) if m.get("id")}
+            # The gateway may annotate which provider should serve each model
+            # (dashboard api_format=opencode-go -> provider_id=opencode-go).
+            # When present it wins over the hardcoded pinning below.
+            wanted_provider = {
+                m["id"]: m.get("provider_id")
+                for m in data.get("data", [])
+                if m.get("id") and m.get("provider_id")
+            }
             logger.info("gateway model sync: fetched gateway models", count=len(wanted), models=sorted(wanted))
 
             provider_ids = list(getattr(models_api, "impls_by_provider_id", {}).keys())
@@ -1064,7 +1072,8 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 for model_id in sorted(wanted):
                     try:
                         provider_id = (
-                            "opencode-go" if model_id in opencode_go_model_ids else first_provider
+                            wanted_provider.get(model_id)
+                            or ("opencode-go" if model_id in opencode_go_model_ids else first_provider)
                         )
                         # Re-pin: if the model exists but on a different
                         # provider than the sync wants (e.g. kimi-k3 registered
