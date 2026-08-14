@@ -12,8 +12,8 @@ jest.mock("next/navigation", () => ({
   }),
 }));
 
-// Mock NextAuth
-jest.mock("next-auth/react", () => ({
+// Mock the session hook
+jest.mock("@/lib/auth-session", () => ({
   useSession: () => ({
     data: {
       accessToken: "mock-access-token",
@@ -24,6 +24,9 @@ jest.mock("next-auth/react", () => ({
     },
     status: "authenticated",
   }),
+  signIn: jest.fn(),
+  signOut: jest.fn(),
+  SessionProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 describe("VectorStoreDetailView", () => {

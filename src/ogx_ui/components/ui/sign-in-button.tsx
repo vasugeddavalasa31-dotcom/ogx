@@ -2,7 +2,7 @@
 
 import { User } from "lucide-react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import { useSession } from "@/lib/auth-session";
 import { Button } from "./button";
 
 export function SignInButton() {

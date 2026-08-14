@@ -1,4 +1,4 @@
-import { useSession } from "next-auth/react";
+import { useSession } from "@/lib/auth-session";
 import { useMemo } from "react";
 import OgxClient from "ogx-client";
 

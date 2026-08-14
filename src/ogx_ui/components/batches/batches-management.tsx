@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useAuthClient } from "@/hooks/use-auth-client";
-import { useSession } from "next-auth/react";
+import { useSession } from "@/lib/auth-session";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {

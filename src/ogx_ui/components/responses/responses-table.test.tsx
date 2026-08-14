@@ -12,12 +12,15 @@ jest.mock("next/navigation", () => ({
   }),
 }));
 
-// Mock next-auth
-jest.mock("next-auth/react", () => ({
+// Mock the session hook
+jest.mock("@/lib/auth-session", () => ({
   useSession: () => ({
     status: "authenticated",
     data: { accessToken: "mock-token" },
   }),
+  signIn: jest.fn(),
+  signOut: jest.fn(),
+  SessionProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 // Mock helper functions

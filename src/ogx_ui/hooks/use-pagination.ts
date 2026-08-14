@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { PaginationStatus, UsePaginationOptions } from "@/lib/types";
-import { useSession } from "next-auth/react";
+import { useSession } from "@/lib/auth-session";
 import { useAuthClient } from "@/hooks/use-auth-client";
 import { useRouter } from "next/navigation";
 

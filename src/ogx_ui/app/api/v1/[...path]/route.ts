@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/server-auth";
 
 // Get backend URL from environment variable or default to localhost for development
 const BACKEND_URL =
@@ -43,12 +44,14 @@ async function proxyRequest(request: NextRequest, method: string) {
       headers.set(key, value);
     });
 
-    // When OGX is locked to a shared internal secret, the UI presents that
-    // token so proxied calls keep working (the per-user GitHub token cannot be
-    // validated by the gateway's /auth/ogx endpoint).
-    const uiToken = process.env.OGX_UI_TOKEN;
-    if (uiToken) {
-      headers.set("authorization", `Bearer ${uiToken}`);
+    // When OGX is locked behind the gateway, the UI authenticates via the
+    // gateway key entered at login (stored in the signed session cookie).
+    // Fall back to the legacy fixed OGX_UI_TOKEN for deployments that proxy
+    // directly to an unlocked OGX.
+    const session = await getSession();
+    const bearerToken = session?.gatewayKey || process.env.OGX_UI_TOKEN;
+    if (bearerToken) {
+      headers.set("authorization", `Bearer ${bearerToken}`);
     }
 
     // Prepare the request options
