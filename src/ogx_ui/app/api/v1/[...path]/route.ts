@@ -44,12 +44,13 @@ async function proxyRequest(request: NextRequest, method: string) {
       headers.set(key, value);
     });
 
-    // When OGX is locked behind the gateway, the UI authenticates via the
-    // gateway key entered at login (stored in the signed session cookie).
-    // Fall back to the legacy fixed OGX_UI_TOKEN for deployments that proxy
-    // directly to an unlocked OGX.
+    // The deployed OGX is locked behind the gateway (/auth/ogx accepts only
+    // the shared internal secret), so the UI authenticates with OGX_UI_TOKEN
+    // (= that secret). The gateway key entered at login is used only as a
+    // fallback for deployments that proxy to an unlocked OGX.
+    const uiToken = process.env.OGX_UI_TOKEN;
     const session = await getSession();
-    const bearerToken = session?.gatewayKey || process.env.OGX_UI_TOKEN;
+    const bearerToken = uiToken || session?.gatewayKey;
     if (bearerToken) {
       headers.set("authorization", `Bearer ${bearerToken}`);
     }
