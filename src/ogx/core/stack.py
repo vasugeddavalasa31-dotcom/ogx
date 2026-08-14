@@ -1001,9 +1001,11 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
         for mid in _os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
         if mid.strip()
     }
-    # DeepSeek v4 models are served via the OpenCode Go provider in this
+    # DeepSeek v4 + Kimi models are served via the OpenCode Go provider in this
     # deployment — always pin them there (see entrypoint.sh for the boot path).
-    opencode_go_model_ids.update({"deepseek-v4-flash", "deepseek-v4-pro"})
+    opencode_go_model_ids.update(
+        {"deepseek-v4-flash", "deepseek-v4-pro", "kimi-k3"}
+    )
     # The configured URL may be a bare origin (health endpoint); the model list
     # lives under /v1/models.
     _base = url.rstrip("/")
@@ -1055,16 +1057,58 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 elif getattr(models_api, "gateway_managed", False):
                     logger.warning("gateway model sync: empty gateway list, skipping reconciliation")
 
-                # Ensure every gateway-listed model is registered. Runs every
-                # cycle (no seen-set) so a model wiped by a previous bad
-                # reconciliation is re-registered on the next cycle.
+                # Ensure every gateway-listed model is registered on the
+                # provider the sync wants it on. Runs every cycle (no seen-set)
+                # so a model wiped by a previous bad reconciliation is
+                # re-registered on the next cycle.
                 for model_id in sorted(wanted):
-                    if model_id in existing_bare_ids:
-                        continue
                     try:
                         provider_id = (
                             "opencode-go" if model_id in opencode_go_model_ids else first_provider
                         )
+                        # Re-pin: if the model exists but on a different
+                        # provider than the sync wants (e.g. kimi-k3 registered
+                        # on "openai" after a routing change), drop the stale
+                        # entry so it re-registers on the correct provider.
+                        stale = [
+                            m
+                            for m in existing_llm
+                            if m.identifier.rsplit("/", 1)[-1] == model_id
+                            and m.provider_id != provider_id
+                        ]
+                        if stale:
+                            for m in stale:
+                                logger.info(
+                                    "gateway model sync: re-pinning model provider",
+                                    model=m.identifier,
+                                    old_provider=m.provider_id,
+                                    new_provider=provider_id,
+                                )
+                                try:
+                                    await models_api.unregister_model(m.identifier)
+                                except Exception as exc:
+                                    logger.warning(
+                                        "gateway model sync: re-pin remove failed",
+                                        model=m.identifier,
+                                        error=str(exc),
+                                    )
+                            await models_api.register_model(
+                                RegisterModelRequest(
+                                    model_id=model_id,
+                                    provider_id=provider_id,
+                                    provider_model_id=model_id,
+                                    model_type=ModelType.llm,
+                                    metadata={"_unprefixed_alias": True},
+                                )
+                            )
+                            logger.info(
+                                "gateway model sync: re-registered",
+                                model_id=model_id,
+                                provider_id=provider_id,
+                            )
+                            continue
+                        if model_id in existing_bare_ids:
+                            continue
                         await models_api.register_model(
                             RegisterModelRequest(
                                 model_id=model_id,

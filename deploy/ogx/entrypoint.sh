@@ -59,10 +59,10 @@ if gateway_models_url:
                 for mid in os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
                 if mid.strip()
             }
-            # DeepSeek v4 models are served via the OpenCode Go provider
+            # DeepSeek v4 + Kimi models are served via the OpenCode Go provider
             # (https://opencode.ai/zen/go/v1) in this deployment — always pin
             # them there so they don't route to the direct DeepSeek API.
-            opencode_go_model_ids.update({"deepseek-v4-flash", "deepseek-v4-pro"})
+            opencode_go_model_ids.update({"deepseek-v4-flash", "deepseek-v4-pro", "kimi-k3"})
             cfg["registered_resources"]["models"] = [
                 {
                     # `_unprefixed_alias` registers the model under its bare id
