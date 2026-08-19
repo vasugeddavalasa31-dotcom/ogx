@@ -709,18 +709,8 @@ class StreamingCitationCleaner:
         return cleaned
 
 
-def is_function_tool_call(
-    tool_call: OpenAIChatCompletionToolCall,
-    tools: list[OpenAIResponseInputTool],
-) -> bool:
-    """Check whether a tool call corresponds to a user-defined function tool.
-
-    Args:
-        tool_call: the tool call to check
-        tools: list of available response input tools
-
-    Returns:
 def is_function_tool_call(tool_call, tools: list[any] | None) -> bool:
+    """Check whether a tool call corresponds to a user-defined function tool."""
     if not tools or not tool_call:
         return False
     func = getattr(tool_call, "function", None) or (tool_call.get("function") if isinstance(tool_call, dict) else None)
