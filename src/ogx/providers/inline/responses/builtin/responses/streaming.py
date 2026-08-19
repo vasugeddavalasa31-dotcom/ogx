@@ -339,8 +339,11 @@ class StreamingResponseOrchestrator:
             return False
         if self._custom_tool_names is None:
             self._custom_tool_names = {
-                t.name for t in (self.ctx.response_tools or []) if t.type == "custom"
+                (getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None))
+                for t in (self.ctx.response_tools or [])
+                if (getattr(t, "type", None) or (t.get("type") if isinstance(t, dict) else None)) == "custom"
             }
+            self._custom_tool_names.discard(None)
         return name in self._custom_tool_names
 
     async def _create_refusal_response(self, violation_message: str) -> OpenAIResponseObjectStream:
@@ -885,8 +888,9 @@ class StreamingResponseOrchestrator:
                         # any registered function tool, server-side built-in, or
                         # MCP tool.
                         has_client_tools = any(
-                            t.type in ("function", "namespace", "custom")
-                            for t in self.ctx.response_tools
+                            (getattr(t, "type", None) or (t.get("type") if isinstance(t, dict) else None))
+                            in ("function", "namespace", "custom")
+                            for t in (self.ctx.response_tools or [])
                         )
                         if has_client_tools:
                             # A client is expected to handle function calls, so

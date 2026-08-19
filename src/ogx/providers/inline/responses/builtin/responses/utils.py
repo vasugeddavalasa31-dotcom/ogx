@@ -720,29 +720,26 @@ def is_function_tool_call(
         tools: list of available response input tools
 
     Returns:
-        True if the tool call matches a function tool in the tools list,
-        including tools nested inside namespace containers and OrbiterX
-        freeform `custom` tools.
-    """
-    if not tool_call.function:
+def is_function_tool_call(tool_call, tools: list[any] | None) -> bool:
+    if not tools or not tool_call:
         return False
-    name = tool_call.function.name
-    # The model receives namespaced tools prefixed with the namespace (e.g.
-    # "multi_agent_v1__spawn_agent"); strip any such prefix before matching.
+    func = getattr(tool_call, "function", None) or (tool_call.get("function") if isinstance(tool_call, dict) else None)
+    if not func:
+        return False
+    name = getattr(func, "name", None) or (func.get("name") if isinstance(func, dict) else None)
+    if not name:
+        return False
     bare_name = name.split("__", 1)[-1]
     for t in tools:
-        if t.type == "function" and t.name == name:
+        t_type = getattr(t, "type", None) or (t.get("type") if isinstance(t, dict) else None)
+        t_name = getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None)
+        if t_type in ("function", "custom") and t_name == name:
             return True
-        # OrbiterX freeform/custom tools are surfaced as function calls.
-        if t.type == "custom" and t.name == name:
-            return True
-        # Namespace containers hold nested function tools (OrbiterX multi-agent
-        # tools like spawn_agent / list_agents). The tool call may arrive with
-        # the namespace prefix ("multi_agent_v1__spawn_agent"), so match the
-        # bare name against the nested function names.
-        if t.type == "namespace":
-            for ns_tool in t.tools:
-                if ns_tool.name in (name, bare_name):
+        if t_type == "namespace":
+            ns_tools = getattr(t, "tools", None) or (t.get("tools") if isinstance(t, dict) else None) or []
+            for ns_tool in ns_tools:
+                ns_name = getattr(ns_tool, "name", None) or (ns_tool.get("name") if isinstance(ns_tool, dict) else None)
+                if ns_name in (name, bare_name):
                     return True
     return False
 
