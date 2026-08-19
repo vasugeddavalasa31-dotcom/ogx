@@ -685,21 +685,24 @@ class StreamingResponseOrchestrator:
                     )
 
                     if should_summarize_reasoning(self.reasoning):
-                        summary_mode = (
-                            self.reasoning.summary if self.reasoning and self.reasoning.summary else "concise"
-                        )
-                        summary_usage_list: list[OpenAIChatCompletionUsage] = []
-                        summary_text = await summarize_reasoning(
-                            inference_api=self.inference_api,
-                            model=self.ctx.model,
-                            reasoning_text=completion_result_data.reasoning_content,
-                            summary_mode=summary_mode,
-                            summary_usage=summary_usage_list,
-                        )
-                        if summary_text:
-                            reasoning_item.summary = [OpenAIResponseOutputMessageReasoningSummary(text=summary_text)]
-                        for usage in summary_usage_list:
-                            self._accumulate_usage(usage)
+                        try:
+                            summary_mode = (
+                                self.reasoning.summary if self.reasoning and self.reasoning.summary else "concise"
+                            )
+                            summary_usage_list: list[OpenAIChatCompletionUsage] = []
+                            summary_text = await summarize_reasoning(
+                                inference_api=self.inference_api,
+                                model=self.ctx.model,
+                                reasoning_text=completion_result_data.reasoning_content,
+                                summary_mode=summary_mode,
+                                summary_usage=summary_usage_list,
+                            )
+                            if summary_text:
+                                reasoning_item.summary = [OpenAIResponseOutputMessageReasoningSummary(text=summary_text)]
+                            for usage in summary_usage_list:
+                                self._accumulate_usage(usage)
+                        except Exception as exc:
+                            logger.warning("Failed to summarize reasoning, skipping summary", exc_info=exc)
 
                     reasoning_item.status = "completed"
                     self.sequence_number += 1

@@ -889,9 +889,9 @@ async def summarize_reasoning(
 
     try:
         summary_result = await inference_api.openai_chat_completion(summary_params)
-    except Exception:
-        logger.exception("Failed to generate reasoning summary")
-        raise
+    except Exception as exc:
+        logger.warning("Failed to generate reasoning summary, continuing without summary", exc_info=exc)
+        return None
 
     if isinstance(summary_result, AsyncIterator):
         raise RuntimeError("Expected non-streaming response from summary call")
