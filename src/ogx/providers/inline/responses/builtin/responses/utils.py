@@ -845,8 +845,8 @@ logger = get_logger("ogx.providers.inline.responses.builtin.responses.utils", ca
 
 
 def should_summarize_reasoning(reasoning: OpenAIResponseReasoning | None) -> bool:
-    """Check whether reasoning summaries were requested."""
-    return bool(reasoning and reasoning.summary)
+    """Check whether reasoning summaries were requested (disabled to prevent double API calls and token waste)."""
+    return False
 
 
 def build_summary_prompt(reasoning_text: str, summary_mode: str) -> str:
