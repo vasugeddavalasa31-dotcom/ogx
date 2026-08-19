@@ -59,10 +59,31 @@ if gateway_models_url:
                 for mid in os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
                 if mid.strip()
             }
-            # DeepSeek v4 + Kimi models are served via the OpenCode Go provider
-            # (https://opencode.ai/zen/go/v1) in this deployment — always pin
-            # them there so they don't route to the direct DeepSeek API.
-            opencode_go_model_ids.update({"deepseek-v4-flash", "deepseek-v4-pro", "kimi-k3"})
+            # OpenCode Go models (https://opencode.ai/zen/go/v1) must be pinned
+            # to the opencode-go provider so they don't route to the direct DeepSeek API.
+            opencode_go_model_ids.update({
+                "deepseek-v4-flash",
+                "deepseek-v4-pro",
+                "kimi-k3",
+                "kimi-k2.7-code",
+                "kimi-k2.6",
+                "kimi-k2.5",
+                "glm-5.2",
+                "glm-5.3",
+                "glm-5.1",
+                "glm-5",
+                "qwen3.7-max",
+                "qwen3.8-max",
+                "qwen3.7-plus",
+                "minimax-m3",
+                "minimax-m2.7",
+                "mimo-v2.5-pro",
+                "mimo-v2.5",
+                "gpt-5.6-luna",
+                "grok-4.5",
+                "muse-spark-1.2",
+                "muse-spark-1.2-contributor",
+            })
             cfg["registered_resources"]["models"] = [
                 {
                     # `_unprefixed_alias` registers the model under its bare id
@@ -76,7 +97,7 @@ if gateway_models_url:
                     # deepseek-v4-flash. Here the gateway/TiDB model ids are
                     # the provider ids, so they map 1:1.
                     "provider_model_id": m["id"],
-                    "provider_id": "opencode-go" if m["id"] in opencode_go_model_ids else "all",
+                    "provider_id": "opencode-go" if m["id"] in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or m["id"].startswith("muse") else "all",
                     "model_type": "llm",
                 }
                 for m in _models
