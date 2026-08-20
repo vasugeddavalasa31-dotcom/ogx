@@ -227,6 +227,11 @@ registered_resources:
       provider_id: opencode-go
       provider_model_id: muse-spark-1.2
       model_type: llm
+    - metadata: {_unprefixed_alias: true}
+      model_id: mimo-v2.5
+      provider_id: opencode-go
+      provider_model_id: mimo-v2.5
+      model_type: llm
   vector_stores: []
 server:
   port: 8321
