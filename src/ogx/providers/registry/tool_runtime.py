@@ -104,4 +104,15 @@ def available_providers() -> list[ProviderSpec]:
             provider_data_validator="ogx.providers.remote.tool_runtime.model_context_protocol.config.MCPProviderDataValidator",
             description="Model Context Protocol (MCP) tool for standardized tool calling and context management.",
         ),
+        RemoteProviderSpec(
+            api=Api.tool_runtime,
+            adapter_type="firecrawl-search",
+            provider_type="remote::firecrawl-search",
+            module="ogx.providers.remote.tool_runtime.firecrawl_search",
+            config_class="ogx.providers.remote.tool_runtime.firecrawl_search.config.FirecrawlSearchToolConfig",
+            pip_packages=[],
+            provider_data_validator="ogx.providers.remote.tool_runtime.firecrawl_search.FirecrawlSearchToolProviderDataValidator",
+            toolgroup_id="builtin::websearch",
+            description="Firecrawl Search and scraping tool for real-time web search and full-page markdown extraction.",
+        ),
     ]

@@ -455,16 +455,27 @@ class ToolExecutor:
                 # TODO: follow semantic conventions for Open Telemetry tool spans
                 # https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/#execute-tool-span
                 with tracer.start_as_current_span("invoke_tool", attributes=attributes):
-                    result = await self.tool_runtime_api.invoke_tool(
-                        tool_name=function_name,
-                        kwargs=tool_kwargs,
-                    )
+                    try:
+                        result = await self.tool_runtime_api.invoke_tool(
+                            tool_name=function_name,
+                            kwargs=tool_kwargs,
+                        )
+                    except Exception as invoke_err:
+                        from ogx.providers.remote.tool_runtime.firecrawl_search.config import FirecrawlSearchToolConfig
+                        from ogx.providers.remote.tool_runtime.firecrawl_search.firecrawl_search import (
+                            FirecrawlSearchToolRuntimeImpl,
+                        )
+                        fallback_impl = FirecrawlSearchToolRuntimeImpl(FirecrawlSearchToolConfig())
+                        await fallback_impl.initialize()
+                        result = await fallback_impl.invoke_tool(
+                            tool_name=function_name,
+                            kwargs=tool_kwargs,
+                        )
+                        await fallback_impl.shutdown()
             else:
                 attributes = {
                     "tool_name": function_name,
                 }
-                # TODO: follow semantic conventions for Open Telemetry tool spans
-                # https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/#execute-tool-span
                 with tracer.start_as_current_span("invoke_tool", attributes=attributes):
                     result = await self.tool_runtime_api.invoke_tool(
                         tool_name=function_name,
