@@ -570,14 +570,12 @@ class ToolExecutor:
             if function.name == "web_search":
                 message = OpenAIResponseOutputMessageWebSearchToolCall(
                     id=item_id,
-                    status="completed",
+                    status="failed" if has_error else "completed",
                 )
-                if has_error:
-                    message.status = "failed"
-                elif result and (metadata := getattr(result, "metadata", None)):
+                if result and (metadata := getattr(result, "metadata", None)):
                     sources = []
                     for source in metadata.get("sources", []):
-                        if "url" in source:
+                        if isinstance(source, dict) and "url" in source:
                             sources.append(WebSearchSource(url=source["url"]))
                     query = metadata.get("query", tool_kwargs.get("query", ""))
                     message.action = WebSearchActionSearch(
@@ -585,6 +583,8 @@ class ToolExecutor:
                         queries=[query],
                         sources=sources,
                     )
+                if result and (content := getattr(result, "content", None)):
+                    message.output = interleaved_content_as_str(content)
             elif function.name in ("knowledge_search", "file_search"):
                 message = OpenAIResponseOutputMessageFileSearchToolCall(
                     id=item_id,

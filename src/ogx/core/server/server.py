@@ -534,7 +534,7 @@ def create_app() -> StackApp:
     app.exception_handler(ResourceNotFoundError)(global_exception_handler)
     app.exception_handler(AuthenticationRequiredError)(global_exception_handler)
     app.exception_handler(AccessDeniedError)(global_exception_handler)
-    # Dedicated Codex Search Endpoint
+    # Dedicated Codex Search Endpoint (/v1/alpha/search)
     @app.post("/v1/alpha/search")
     async def ogx_alpha_search(request: Request):
         try:
@@ -542,12 +542,32 @@ def create_app() -> StackApp:
         except Exception:
             return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
 
-        commands = body.get("commands", [])
+        commands = body.get("commands") or {}
         query = ""
-        for cmd in commands:
-            if isinstance(cmd, dict) and cmd.get("type") in ("search_query", "weather", "finance", "sports", "time"):
-                query = cmd.get("query") or cmd.get("text") or query
-                break
+        if isinstance(commands, dict):
+            # 1. search_query: [{"q": "..."}]
+            if (sq := commands.get("search_query")) and isinstance(sq, list) and len(sq) > 0:
+                query = sq[0].get("q") or ""
+            # 2. image_query: [{"q": "..."}]
+            elif (iq := commands.get("image_query")) and isinstance(iq, list) and len(iq) > 0:
+                query = iq[0].get("q") or ""
+            # 3. weather: [{"location": "..."}]
+            elif (wq := commands.get("weather")) and isinstance(wq, list) and len(wq) > 0:
+                loc = wq[0].get("location") or ""
+                query = f"weather in {loc}" if loc else "weather"
+            # 4. finance: [{"symbol": "..."}]
+            elif (fq := commands.get("finance")) and isinstance(fq, list) and len(fq) > 0:
+                query = f"stock price {fq[0].get('symbol') or ''}"
+            # 5. open: [{"ref_id": "..."}]
+            elif (op := commands.get("open")) and isinstance(op, list) and len(op) > 0:
+                query = op[0].get("ref_id") or ""
+        elif isinstance(commands, list):
+            for cmd in commands:
+                if isinstance(cmd, dict):
+                    query = cmd.get("query") or cmd.get("text") or cmd.get("q") or query
+                    if query:
+                        break
+
         if not query and "query" in body:
             query = str(body["query"])
 
@@ -563,12 +583,22 @@ def create_app() -> StackApp:
         sources = tool_res.metadata.get("sources", []) if tool_res.metadata else []
         results = []
         for idx, s in enumerate(sources, 1):
+            url = s.get("url") or ""
+            title = s.get("title") or "Web Search Result"
+            domain = ""
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc.replace("www.", "")
+            except Exception:
+                domain = url
             results.append({
                 "ref_id": idx,
-                "title": s.get("title") or "Web Search Result",
-                "url": s.get("url") or "",
+                "title": title,
+                "url": url,
+                "domain": domain,
                 "snippet": s.get("snippet") or "",
             })
+
         return JSONResponse(content={
             "output": tool_res.content,
             "results": results,
