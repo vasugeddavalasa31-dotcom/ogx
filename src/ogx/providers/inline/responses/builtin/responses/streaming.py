@@ -136,7 +136,11 @@ tracer = trace.get_tracer(__name__)
 
 # Built-in tool names that the server knows how to execute itself.
 # Anything else is either a registered function tool (client-side) or a hallucinated name.
-_SERVER_SIDE_BUILTIN_TOOL_NAMES = frozenset({"web_search", "knowledge_search", "file_search"})
+# Client-side standalone search: web_search is NOT executed server-side.
+# The daemon advertises `web.run` (ext/web-search) and handles web_search /
+# web.run calls itself via /alpha/search (gateway → Firecrawl worker), so ogx
+# must surface such calls back to the client instead of running them here.
+_SERVER_SIDE_BUILTIN_TOOL_NAMES = frozenset({"knowledge_search", "file_search"})
 
 _MAX_HALLUCINATED_TOOL_RETRIES = 3
 
