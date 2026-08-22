@@ -13,7 +13,7 @@ class FirecrawlSearchToolConfig(BaseToolRuntimeConfig):
     """Configuration for the Firecrawl Search tool runtime."""
 
     api_url: str = Field(
-        default="http://localhost:3002",
+        default="https://orbiterx-websearch.vasugeddavalasa31.workers.dev",
         description="The base URL of the self-hosted Firecrawl instance or cloud API.",
     )
     api_key: SecretStr | None = Field(
@@ -28,7 +28,7 @@ class FirecrawlSearchToolConfig(BaseToolRuntimeConfig):
     @classmethod
     def sample_run_config(cls, __distro_dir__: str) -> dict[str, Any]:
         return {
-            "api_url": "${env.FIRECRAWL_API_URL:=http://localhost:3002}",
+            "api_url": "${env.FIRECRAWL_API_URL:=https://orbiterx-websearch.vasugeddavalasa31.workers.dev}",
             "api_key": "${env.FIRECRAWL_API_KEY:=}",
             "max_results": 5,
         }

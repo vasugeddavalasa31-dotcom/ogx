@@ -51,7 +51,7 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
         env_url = os.getenv("FIRECRAWL_API_URL", "").strip()
         if env_url:
             return env_url
-        return self.config.api_url or "http://localhost:3002"
+        return self.config.api_url or "https://orbiterx-websearch.vasugeddavalasa31.workers.dev"
 
     def _get_api_key(self) -> str | None:
         if self.config.api_key:
