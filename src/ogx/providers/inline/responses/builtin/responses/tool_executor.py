@@ -583,8 +583,10 @@ class ToolExecutor:
                         queries=[query],
                         sources=sources,
                     )
-                if result and (content := getattr(result, "content", None)):
-                    message.output = interleaved_content_as_str(content)
+                # NOTE: the OGX/OpenAI web_search_call item has no `output`
+                # field (id/status/type/action only), so the search text
+                # cannot be attached here; it is delivered to the model via
+                # the tool input message below.
             elif function.name in ("knowledge_search", "file_search"):
                 message = OpenAIResponseOutputMessageFileSearchToolCall(
                     id=item_id,
