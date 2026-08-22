@@ -534,9 +534,45 @@ def create_app() -> StackApp:
     app.exception_handler(ResourceNotFoundError)(global_exception_handler)
     app.exception_handler(AuthenticationRequiredError)(global_exception_handler)
     app.exception_handler(AccessDeniedError)(global_exception_handler)
-    app.exception_handler(BadRequestError)(global_exception_handler)
-    # Generic Exception handler should be last
-    app.exception_handler(Exception)(global_exception_handler)
+    # Dedicated Codex Search Endpoint
+    @app.post("/v1/alpha/search")
+    async def ogx_alpha_search(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+        commands = body.get("commands", [])
+        query = ""
+        for cmd in commands:
+            if isinstance(cmd, dict) and cmd.get("type") in ("search_query", "weather", "finance", "sports", "time"):
+                query = cmd.get("query") or cmd.get("text") or query
+                break
+        if not query and "query" in body:
+            query = str(body["query"])
+
+        from ogx.providers.remote.tool_runtime.firecrawl_search.config import FirecrawlSearchToolConfig
+        from ogx.providers.remote.tool_runtime.firecrawl_search.firecrawl_search import FirecrawlSearchToolRuntimeImpl
+
+        max_results = int(body.get("max_results", 5))
+        impl = FirecrawlSearchToolRuntimeImpl(FirecrawlSearchToolConfig())
+        await impl.initialize()
+        tool_res = await impl.invoke_tool("web_search", {"query": query, "max_results": max_results})
+        await impl.shutdown()
+
+        sources = tool_res.metadata.get("sources", []) if tool_res.metadata else []
+        results = []
+        for idx, s in enumerate(sources, 1):
+            results.append({
+                "ref_id": idx,
+                "title": s.get("title") or "Web Search Result",
+                "url": s.get("url") or "",
+                "snippet": s.get("snippet") or "",
+            })
+        return JSONResponse(content={
+            "output": tool_res.content,
+            "results": results,
+        })
 
     return app
 
