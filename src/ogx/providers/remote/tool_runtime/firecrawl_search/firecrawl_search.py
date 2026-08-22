@@ -139,13 +139,45 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
         #    the model can still cite them.
         if is_weather_query and self._client:
             try:
-                # Extract probable city
-                city_match = re.search(
-                    r"(?:in|for|at|around)\s+([A-Za-z\s]+?)(?:\s+(?:right now|today|live|conditions|temperature|weather|$))",
-                    query,
+                # Extract probable city, stopping at trailing noise words
+                # (e.g. "current weather in London right now live conditions"
+                # -> "London", never "current").
+                weather_stop_words = {
+                    "right", "now", "today", "live", "current", "conditions",
+                    "condition", "temperature", "temp", "humidity", "wind",
+                    "winds", "forecast", "tonight", "tomorrow", "this", "week",
+                    "weekend", "august", "aug", "september", "october", "2026",
+                    "2025", "at", "in", "for", "the", "a", "of", "what", "is",
+                    "and", "weather", "mph", "degrees", "outside", "site", "gov",
+                    "uk", "bbc", "met", "office", "observation", "hourly", "hour",
+                    "celsius", "search", "web", "give", "me", "cloud", "clouds",
+                    "rain", "sunny",
+                }
+                clean_query = re.sub(r"[^a-zA-Z'\s-]", " ", query)
+                candidates = []
+                m = re.search(
+                    r"(?:weather|forecast)\s+(?:in|for|at|around)\s+([a-zA-Z']+(?:[\s-][a-zA-Z']+){0,3})",
+                    clean_query,
                     re.I,
-                ) or re.search(r"([A-Za-z]+)\s+weather", query, re.I)
-                city = city_match.group(1).strip() if city_match else "London"
+                )
+                if m:
+                    candidates.append(m.group(1))
+                m = re.search(
+                    r"([a-zA-Z']+(?:[\s-][a-zA-Z']+){0,3})\s+(?:weather|forecast)",
+                    clean_query,
+                    re.I,
+                )
+                if m:
+                    candidates.append(m.group(1))
+                m = re.search(r"weather\s+([a-zA-Z']+(?:[\s-][a-zA-Z']+){0,3})", clean_query, re.I)
+                if m:
+                    candidates.append(m.group(1))
+                city = "London"
+                for cand in candidates:
+                    words = [w for w in cand.split() if w and w.lower() not in weather_stop_words]
+                    if words:
+                        city = " ".join(words)
+                        break
 
                 w_res = await self._client.get(
                     f"https://wttr.in/{city}?format=j1",
