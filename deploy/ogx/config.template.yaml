@@ -232,6 +232,11 @@ registered_resources:
       provider_id: opencode-go
       provider_model_id: mimo-v2.5
       model_type: llm
+    - metadata: {_unprefixed_alias: true}
+      model_id: ox-alpha-free
+      provider_id: opencode-go
+      provider_model_id: ox-alpha-free
+      model_type: llm
   vector_stores: []
 server:
   port: 8321

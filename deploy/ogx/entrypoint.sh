@@ -79,6 +79,7 @@ if gateway_models_url:
                 "minimax-m2.7",
                 "mimo-v2.5-pro",
                 "mimo-v2.5",
+                "ox-alpha-free",
                 "gpt-5.6-luna",
                 "grok-4.5",
                 "muse-spark-1.2",
