@@ -4,6 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
+import asyncio
 import json
 import time
 import uuid
@@ -85,6 +86,9 @@ from ogx_api import (
     OpenAIResponseObjectStreamResponseReasoningTextDone,
     OpenAIResponseObjectStreamResponseRefusalDelta,
     OpenAIResponseObjectStreamResponseRefusalDone,
+    OpenAIResponseObjectStreamResponseWebSearchCallCompleted,
+    OpenAIResponseObjectStreamResponseWebSearchCallInProgress,
+    OpenAIResponseObjectStreamResponseWebSearchCallSearching,
     OpenAIResponseOutput,
     OpenAIResponseOutputMessageContentOutputText,
     OpenAIResponseOutputMessageCustomToolCall,
@@ -1614,6 +1618,138 @@ class StreamingResponseOrchestrator:
             model=result.model,
         )
 
+    async def _coordinate_web_search_batch(
+        self,
+        web_search_calls: list,
+        completion_result_data: ChatCompletionResult,
+        output_messages: list[OpenAIResponseOutput],
+        next_turn_messages: list,
+    ) -> AsyncIterator[OpenAIResponseObjectStream]:
+        """Run a batch of web_search calls in parallel and replay lifecycle in order.
+
+        All calls execute concurrently (each is an independent network search),
+        then the in_progress → searching → completed → done lifecycle is
+        replayed in the original call order with monotonically increasing
+        sequence numbers so the client sees identical semantics to the
+        sequential path — just much faster.
+        """
+        # Prepare: honor max_tool_calls skips and resolve per-call item ids.
+        prepared: list[tuple[Any, str]] = []
+        for tool_call in web_search_calls:
+            if self.max_tool_calls is not None and self.accumulated_builtin_tool_calls >= self.max_tool_calls:
+                logger.info(
+                    "Ignoring built-in and mcp tool call since reached the limit", max_tool_calls=self.max_tool_calls
+                )
+                next_turn_messages.append(
+                    OpenAIToolMessageParam(
+                        content=f"Tool call skipped: maximum tool calls limit ({self.max_tool_calls}) reached.",
+                        tool_call_id=tool_call.id,
+                    )
+                )
+                continue
+
+            matching_item_id = None
+            for index, item_id in completion_result_data.tool_call_item_ids.items():
+                response_tool_call = completion_result_data.tool_calls.get(index)
+                if response_tool_call and response_tool_call.id == tool_call.id:
+                    matching_item_id = item_id
+                    break
+
+            if not matching_item_id:
+                matching_item_id = f"tc_{uuid.uuid4()}"
+
+            prepared.append((tool_call, matching_item_id))
+
+        async def collect_one(tool_call: Any, matching_item_id: str):
+            tool_call_log = None
+            tool_response_message = None
+            citation_files = None
+            async for result in self.tool_executor.execute_tool_call(
+                tool_call,
+                self.ctx,
+                0,
+                0,
+                matching_item_id,
+                self.mcp_tool_to_server,
+            ):
+                if result.final_output_message is not None:
+                    tool_call_log = result.final_output_message
+                    tool_response_message = result.final_input_message
+                    citation_files = result.citation_files if result.citation_files else citation_files
+            return tool_call_log, tool_response_message, citation_files
+
+        outcomes = await asyncio.gather(
+            *(collect_one(tool_call, item_id) for tool_call, item_id in prepared),
+            return_exceptions=True,
+        )
+
+        for index, ((tool_call, matching_item_id), outcome) in enumerate(zip(prepared, outcomes)):
+            if isinstance(outcome, BaseException):
+                logger.warning(
+                    "Web search batch item failed", tool_call_id=tool_call.id, error=type(outcome).__name__
+                )
+                next_turn_messages.append(
+                    OpenAIToolMessageParam(content=f"Tool execution failed: {outcome}", tool_call_id=tool_call.id)
+                )
+                self.accumulated_builtin_tool_calls += 1
+                continue
+
+            tool_call_log, tool_response_message, citation_files = outcome
+            if tool_call_log is None:
+                next_turn_messages.append(
+                    OpenAIToolMessageParam(content="Tool execution failed", tool_call_id=tool_call.id)
+                )
+                self.accumulated_builtin_tool_calls += 1
+                continue
+
+            # Replay the canonical web_search lifecycle in call order.
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseOutputItemAdded(
+                response_id=self.response_id,
+                item=OpenAIResponseOutputMessageWebSearchToolCall(
+                    id=matching_item_id,
+                    status="in_progress",
+                ),
+                output_index=len(output_messages),
+                sequence_number=self.sequence_number,
+            )
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseWebSearchCallInProgress(
+                item_id=matching_item_id,
+                output_index=len(output_messages),
+                sequence_number=self.sequence_number,
+            )
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseWebSearchCallSearching(
+                item_id=matching_item_id,
+                output_index=len(output_messages),
+                sequence_number=self.sequence_number,
+            )
+            self.sequence_number += 1
+            yield OpenAIResponseObjectStreamResponseWebSearchCallCompleted(
+                item_id=matching_item_id,
+                output_index=len(output_messages),
+                sequence_number=self.sequence_number,
+            )
+
+            output_messages.append(tool_call_log)
+            if citation_files:
+                self.citation_files.update(citation_files)
+
+            if tool_response_message:
+                next_turn_messages.append(tool_response_message)
+
+            self.sequence_number += 1
+            if matching_item_id:
+                yield OpenAIResponseObjectStreamResponseOutputItemDone(
+                    response_id=self.response_id,
+                    item=tool_call_log,
+                    output_index=len(output_messages) - 1,
+                    sequence_number=self.sequence_number,
+                )
+
+            self.accumulated_builtin_tool_calls += 1
+
     async def _coordinate_tool_execution(
         self,
         function_tool_calls: list,
@@ -1624,6 +1760,19 @@ class StreamingResponseOrchestrator:
         next_turn_messages: list,
     ) -> AsyncIterator[OpenAIResponseObjectStream]:
         """Coordinate execution of function, custom, and non-function tool calls."""
+        # Parallel fast path: when the model issued multiple web searches in one
+        # batch, run them concurrently (asyncio.gather) and replay the
+        # in_progress/searching/completed lifecycle in call order. This turns a
+        # 3-4 search turn from the sum of per-search latencies into roughly one.
+        if len(non_function_tool_calls) >= 2 and all(
+            tc.function and tc.function.name == "web_search" for tc in non_function_tool_calls
+        ):
+            async for ev in self._coordinate_web_search_batch(
+                non_function_tool_calls, completion_result_data, output_messages, next_turn_messages
+            ):
+                yield ev
+            return
+
         # Execute non-function tool calls
         for tool_call in non_function_tool_calls:
             # if total calls made to built-in and mcp tools exceed max_tool_calls
