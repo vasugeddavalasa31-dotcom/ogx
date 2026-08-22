@@ -114,7 +114,7 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
         api_key = self._get_api_key()
 
         # 1. Try Firecrawl
-        if self._client and api_url and not api_url.endswith("workers.dev"):
+        if self._client and api_url:
             try:
                 headers = {"Content-Type": "application/json"}
                 if api_key:
@@ -123,7 +123,7 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
                     f"{api_url.rstrip('/')}/v1/search",
                     json={"query": q, "limit": max_results, "scrapeOptions": {"formats": ["markdown"]}},
                     headers=headers,
-                    timeout=4.0,
+                    timeout=15.0,
                 )
                 if resp.status_code == 200:
                     items = resp.json().get("data", [])
