@@ -88,11 +88,55 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
     ) -> ToolInvocationResult:
         query = kwargs.get("query", "")
         max_results = kwargs.get("max_results") or self.config.max_results or 5
-
-        # 1. Specialized Real-Time Live Weather Provider
         is_weather_query = bool(
             re.search(r"\b(weather|temperature|temp|forecast|degrees|climate|rain|snow|humidity|wind)\b", query, re.I)
         )
+
+        # 1. Firecrawl-compatible search (self-hosted Cloudflare worker or
+        #    cloud Firecrawl). This is the primary path — its result text
+        #    embeds "[n] title (url)" so the model sees cite-able sources.
+        api_url = self._get_api_url()
+        api_key = self._get_api_key()
+        if self._client and api_url:
+            try:
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+
+                resp = await self._client.post(
+                    f"{api_url.rstrip('/')}/v1/search",
+                    json={
+                        "query": query,
+                        "limit": max_results,
+                        "scrapeOptions": {"formats": ["markdown"]},
+                    },
+                    headers=headers,
+                    timeout=20.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    items = data.get("data", []) if isinstance(data, dict) else []
+                    sources = []
+                    results_text = []
+                    for idx, it in enumerate(items[:max_results], 1):
+                        title = it.get("title") or it.get("metadata", {}).get("title") or "Search Result"
+                        url = it.get("url") or it.get("metadata", {}).get("sourceURL") or ""
+                        md = it.get("markdown") or it.get("description") or ""
+                        if url:
+                            sources.append({"url": url, "title": title})
+                        results_text.append(f"[{idx}] {title} ({url})\n{md[:400]}")
+
+                    if results_text:
+                        return ToolInvocationResult(
+                            content="\n\n".join(results_text),
+                            metadata={"query": query, "sources": sources, "engine": "firecrawl"},
+                        )
+            except Exception:
+                pass
+
+        # 2. Specialized Real-Time Live Weather Provider (fallback when the
+        #    search backend is unreachable). Source URLs are included inline so
+        #    the model can still cite them.
         if is_weather_query and self._client:
             try:
                 # Extract probable city
@@ -136,6 +180,7 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
                             "title": f"BBC Weather — {area_name}, {country}",
                         },
                     ]
+                    source_lines = "\n".join(f"- {s['title']}: {s['url']}" for s in sources)
 
                     weather_text = (
                         f"Current live weather for {area_name}, {country}:\n"
@@ -144,54 +189,14 @@ class FirecrawlSearchToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, Nee
                         f"- Feels like: {feels_c}°C\n"
                         f"- Humidity: {humidity}%\n"
                         f"- Wind: {wind_mph} mph ({wind_dir})\n"
-                        f"Retrieved live from real-time meteorological feeds."
+                        f"Retrieved live from real-time meteorological feeds.\n"
+                        f"Sources:\n{source_lines}"
                     )
 
                     return ToolInvocationResult(
                         content=weather_text,
                         metadata={"query": query, "sources": sources, "engine": "live-weather"},
                     )
-            except Exception:
-                pass
-
-        # 2. Attempt Firecrawl search if configured or accessible
-        api_url = self._get_api_url()
-        api_key = self._get_api_key()
-
-        if self._client and api_url and not api_url.endswith("workers.dev"):
-            try:
-                headers = {"Content-Type": "application/json"}
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-
-                resp = await self._client.post(
-                    f"{api_url.rstrip('/')}/v1/search",
-                    json={
-                        "query": query,
-                        "limit": max_results,
-                        "scrapeOptions": {"formats": ["markdown"]},
-                    },
-                    headers=headers,
-                    timeout=3.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    items = data.get("data", []) if isinstance(data, dict) else []
-                    sources = []
-                    results_text = []
-                    for idx, it in enumerate(items[:max_results], 1):
-                        title = it.get("title") or it.get("metadata", {}).get("title") or "Search Result"
-                        url = it.get("url") or it.get("metadata", {}).get("sourceURL") or ""
-                        md = it.get("markdown") or it.get("description") or ""
-                        if url:
-                            sources.append({"url": url, "title": title})
-                        results_text.append(f"[{idx}] {title} ({url})\n{md[:400]}")
-
-                    if results_text:
-                        return ToolInvocationResult(
-                            content="\n\n".join(results_text),
-                            metadata={"query": query, "sources": sources, "engine": "firecrawl"},
-                        )
             except Exception:
                 pass
 
