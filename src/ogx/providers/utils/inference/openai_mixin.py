@@ -421,14 +421,19 @@ class OpenAIMixin(NeedsRequestProviderData, ABC, BaseModel):
         # DeepSeek's thinking mode requires the assistant's `reasoning_content`
         # to be echoed back on the next request. The Responses layer tags such
         # messages with AssistantMessageWithReasoning; convert them to plain
-        # dicts so the extra field reaches the provider.
-        if any(isinstance(m, AssistantMessageWithReasoning) for m in messages):
-            messages = [
-                _assistant_message_with_reasoning(m)
-                if isinstance(m, AssistantMessageWithReasoning)
-                else m
-                for m in messages
-            ]
+        # dicts so the extra field reaches the provider. Check the attribute
+        # rather than the subtype: after a store/reload cycle (a turn continued
+        # via `previous_response_id`), the assistant message comes back as a
+        # plain OpenAIAssistantMessageParam that still carries
+        # `reasoning_content` in extra state, and the OpenAI SDK would strip it
+        # when serializing a pydantic object. Plain dicts pass through verbatim.
+        messages = [
+            _assistant_message_with_reasoning(m)
+            if isinstance(m, AssistantMessageWithReasoning)
+            or getattr(m, "reasoning_content", None)
+            else m
+            for m in messages
+        ]
 
         if self.download_images:
 
