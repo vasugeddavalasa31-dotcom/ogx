@@ -1100,6 +1100,7 @@ class StreamingResponseOrchestrator:
         reasoning_content_index: int,
         reasoning_item_id: str,
         message_output_index: int,
+        output_messages: list[OpenAIResponseOutput] | None = None,
     ) -> AsyncIterator[OpenAIResponseObjectStream]:
         final_reasoning_text = "".join(reasoning_text_accumulated)
         # Emit reasoning_text.done event
@@ -1125,15 +1126,19 @@ class StreamingResponseOrchestrator:
         )
         # Emit output_item.done for the reasoning item to close the item the
         # client started when the first reasoning chunk arrived.
+        completed_reasoning_item = OpenAIResponseOutputMessageReasoningItem(
+            id=reasoning_item_id,
+            summary=[],
+            content=[OpenAIResponseOutputMessageReasoningContent(text=final_reasoning_text)],
+            status="completed",
+        )
+        # Ensure it is recorded in output_messages so multi-turn tool calling retains it
+        if output_messages is not None and not any(getattr(item, "id", None) == reasoning_item_id for item in output_messages):
+            output_messages.append(completed_reasoning_item)
         self.sequence_number += 1
         yield OpenAIResponseObjectStreamResponseOutputItemDone(
             response_id=self.response_id,
-            item=OpenAIResponseOutputMessageReasoningItem(
-                id=reasoning_item_id,
-                summary=[],
-                content=[OpenAIResponseOutputMessageReasoningContent(text=final_reasoning_text)],
-                status="completed",
-            ),
+            item=completed_reasoning_item,
             output_index=message_output_index,
             sequence_number=self.sequence_number,
         )
@@ -1535,6 +1540,7 @@ class StreamingResponseOrchestrator:
                 reasoning_content_index=reasoning_content_index,
                 reasoning_item_id=reasoning_item_id,
                 message_output_index=message_output_index,
+                output_messages=output_messages,
             ):
                 yield event
 
