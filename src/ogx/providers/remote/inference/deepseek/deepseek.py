@@ -40,12 +40,26 @@ class DeepSeekInferenceAdapter(OpenAIMixin):
     async def openai_chat_completion(
         self,
         params: OpenAIChatCompletionRequestWithExtraBody,
-    ) -> OpenAIChatCompletion | AsyncIterator[OpenAIChatCompletionChunk]:
+    ) -> OpenAIChatCompletion | AsyncIterator[OpenAIChatCompletionChunkWithReasoning] | AsyncIterator[OpenAIChatCompletionChunk]:
         if params.response_format is not None and params.response_format.type == "json_schema":
             raise ValueError(
                 "DeepSeek does not support response_format type 'json_schema'. Use 'json_object' or 'text' instead."
             )
-        return await super().openai_chat_completion(params)
+        result = await super().openai_chat_completion(params)
+        if not isinstance(result, AsyncIterator):
+            return result
+
+        async def _wrap_chunks() -> AsyncIterator[OpenAIChatCompletionChunkWithReasoning]:
+            async for chunk in result:
+                reasoning = None
+                for choice in chunk.choices or []:
+                    reasoning = getattr(choice.delta, "reasoning_content", None)
+                yield OpenAIChatCompletionChunkWithReasoning(
+                    chunk=chunk,
+                    reasoning_content=reasoning,
+                )
+
+        return _wrap_chunks()
 
     async def openai_chat_completions_with_reasoning(
         self,
@@ -61,21 +75,7 @@ class DeepSeekInferenceAdapter(OpenAIMixin):
         if not params.stream:
             raise NotImplementedError("Non-streaming reasoning is not yet supported for DeepSeek")
 
-        result = await self.openai_chat_completion(params)
-        if not isinstance(result, AsyncIterator):
-            raise RuntimeError("Expected streaming response for reasoning, but got non-streaming result")
-
-        async def _wrap_chunks() -> AsyncIterator[OpenAIChatCompletionChunkWithReasoning]:
-            async for chunk in result:
-                reasoning = None
-                for choice in chunk.choices or []:
-                    reasoning = getattr(choice.delta, "reasoning_content", None)
-                yield OpenAIChatCompletionChunkWithReasoning(
-                    chunk=chunk,
-                    reasoning_content=reasoning,
-                )
-
-        return _wrap_chunks()
+        return await self.openai_chat_completion(params)
 
     async def openai_embeddings(
         self,
