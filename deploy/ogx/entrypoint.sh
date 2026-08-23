@@ -62,8 +62,6 @@ if gateway_models_url:
             # OpenCode Go models (https://opencode.ai/zen/go/v1) must be pinned
             # to the opencode-go provider so they don't route to the direct DeepSeek API.
             opencode_go_model_ids.update({
-                "deepseek-v4-flash",
-                "deepseek-v4-pro",
                 "kimi-k3",
                 "kimi-k2.7-code",
                 "kimi-k2.6",

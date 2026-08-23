@@ -1001,10 +1001,10 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
         for mid in _os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
         if mid.strip()
     }
-    # DeepSeek v4 + Kimi models are served via the OpenCode Go provider in this
+    # Kimi models are served via the OpenCode Go provider in this
     # deployment — always pin them there (see entrypoint.sh for the boot path).
     opencode_go_model_ids.update(
-        {"deepseek-v4-flash", "deepseek-v4-pro", "kimi-k3"}
+        {"kimi-k3"}
     )
     # The configured URL may be a bare origin (health endpoint); the model list
     # lives under /v1/models.

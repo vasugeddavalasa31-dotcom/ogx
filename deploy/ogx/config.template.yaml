@@ -219,7 +219,7 @@ registered_resources:
     # minutes and adds/removes models from the TiDB registry.
     - metadata: {_unprefixed_alias: true}
       model_id: deepseek-v4-flash
-      provider_id: opencode-go
+      provider_id: openai
       provider_model_id: deepseek-v4-flash
       model_type: llm
     - metadata: {_unprefixed_alias: true}
