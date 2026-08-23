@@ -87,6 +87,17 @@ async def extract_bytes_from_file(file_id: str, files_api: Files) -> bytes:
         raise ValueError(f"Failed to retrieve file content for file_id '{file_id}': {str(e)}") from e
 
 
+def _valid_json_arguments(arguments: str) -> str:
+    """Upstream chat providers reject assistant tool calls whose arguments
+    aren't valid JSON (e.g. a model hiccup produced a truncated/escaped
+    string). Fall back to an empty object so the continuation passes."""
+    try:
+        json.loads(arguments)
+        return arguments
+    except Exception:
+        return "{}"
+
+
 def generate_base64_ascii_text_from_bytes(raw_bytes: bytes) -> str:
     """
     Converts raw binary bytes into a safe ASCII text representation for URLs
@@ -370,7 +381,7 @@ async def convert_response_input_to_chat_messages(
                     id=input_item.call_id,
                     function=OpenAIChatCompletionToolCallFunction(
                         name=input_item.name,
-                        arguments=input_item.arguments,
+                        arguments=_valid_json_arguments(input_item.arguments),
                     ),
                 )
                 if pending_reasoning:
@@ -412,7 +423,7 @@ async def convert_response_input_to_chat_messages(
                     id=input_item.id,
                     function=OpenAIChatCompletionToolCallFunction(
                         name=input_item.name,
-                        arguments=input_item.arguments,
+                        arguments=_valid_json_arguments(input_item.arguments),
                     ),
                 )
                 if pending_reasoning:
