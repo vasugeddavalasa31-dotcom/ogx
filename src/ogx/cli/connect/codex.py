@@ -182,10 +182,18 @@ class CodexCatalogBuilder:
             "default_reasoning_summary": "auto",
             "support_verbosity": False,
             "default_verbosity": None,
-            "apply_patch_tool_type": None,
+            # Codex parity: expose the freeform apply_patch edit tool by
+            # default (the client engine registers it only when this is set;
+            # None silently forced every model into shell-redirect edits).
+            # Per-model override: custom_metadata["apply_patch_tool_type"].
+            "apply_patch_tool_type": self._coerce_apply_patch_tool_type(
+                metadata.get("apply_patch_tool_type")
+            ),
             "web_search_tool_type": "text",
             "truncation_policy": {"mode": "bytes", "limit": 10000},
-            "supports_parallel_tool_calls": False,
+            "supports_parallel_tool_calls": self._coerce_bool(
+                metadata.get("supports_parallel_tool_calls"), default=True
+            ),
             "supports_image_detail_original": False,
             "effective_context_window_percent": 95,
             "experimental_supported_tools": [],
@@ -249,6 +257,35 @@ class CodexCatalogBuilder:
         if isinstance(value, str) and value.strip():
             return value
         return fallback
+
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("true", "1", "yes", "on"):
+                return True
+            if lowered in ("false", "0", "no", "off"):
+                return False
+        return default
+
+    @staticmethod
+    def _coerce_apply_patch_tool_type(value: Any) -> str | None:
+        """Map a model's declared apply_patch capability to the catalog wire
+        value. Default is the freeform edit tool (Codex parity); only an
+        explicit disable (false / "none" / "off") yields None so the client
+        engine drops the edit tool.
+        """
+        if isinstance(value, bool):
+            return "freeform" if value else None
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("none", "off", "disabled", ""):
+                return None
+            if lowered in ("freeform", "true", "on", "enabled"):
+                return "freeform"
+        return "freeform"
 
     @staticmethod
     def _coerce_string_list(value: Any, fallback: list[str]) -> list[str]:
