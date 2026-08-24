@@ -13,6 +13,9 @@ for p in cfg["providers"]["inference"]:
         p["config"]["api_key"] = api_key
         if not api_key:
             print("WARNING: DEEPSEEK_API_KEY is not set — server will start but requests will fail", flush=True)
+    elif p.get("provider_id") == "opencode-go":
+        api_key = os.environ.get("OPENCODE_GO_API_KEY", "").strip() or "sk-KZt4i5hLCp14QCdqX1Bim5eQa1YFDAWQbUcmKBP5B8KS1WJPdiZ9cz319kWceCOh"
+        p["config"]["api_key"] = api_key
 
 # Optional: source the LLM model list from the gateway (which reads the TiDB
 # admin_model registry). This makes OGX serve exactly the models enabled in the
@@ -51,17 +54,15 @@ if gateway_models_url:
             # Models listed in OPENCODE_GO_MODEL_IDS (comma-separated) are
             # served by the OpenCode Go provider (https://opencode.ai/zen/go/v1)
             # and must be pinned to it. Everything else defaults to provider_id
-            # "all" (first inference provider = DeepSeek). Without this, a
-            # dashboard-added OpenCode Go model would be sent to DeepSeek and
-            # fail.
+            # "all" (first inference provider = DeepSeek).
             opencode_go_model_ids = {
                 mid.strip()
                 for mid in os.environ.get("OPENCODE_GO_MODEL_IDS", "").split(",")
                 if mid.strip()
             }
-            # OpenCode Go models (https://opencode.ai/zen/go/v1) must be pinned
-            # to the opencode-go provider so they don't route to the direct DeepSeek API.
             opencode_go_model_ids.update({
+                "deepseek-v4-flash",
+                "deepseek-v4-pro",
                 "kimi-k3",
                 "kimi-k2.7-code",
                 "kimi-k2.6",
@@ -84,34 +85,24 @@ if gateway_models_url:
                 "muse-spark-1.2",
                 "muse-spark-1.2-contributor",
             })
-            cfg["registered_resources"]["models"] = [
-                {
-                    # `_unprefixed_alias` registers the model under its bare id
-                    # (matching what the app sends) instead of a provider-prefixed
-                    # id like opencode-go/kimi-k3.
-                    "metadata": {"_unprefixed_alias": True},
-                    "model_id": m["id"],
-                    # Pin the provider model id instead of "auto": "auto"
-                    # resolves every alias to the provider's *first* listed
-                    # model, so e.g. deepseek-v4-pro would silently run
-                    # deepseek-v4-flash. Here the gateway/TiDB model ids are
-                    # the provider ids, so they map 1:1.
-                    "provider_model_id": m["id"],
-                    "provider_id": "opencode-go" if m["id"] in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or m["id"].startswith("muse") else "all",
-                    "model_type": "llm",
-                }
-                for m in _models
-            ]
+            
+            existing_model_ids = {m["model_id"] for m in cfg["registered_resources"].get("models", [])}
+            for m in _models:
+                mid = m["id"]
+                if mid not in existing_model_ids:
+                    cfg["registered_resources"]["models"].append({
+                        "metadata": {"_unprefixed_alias": True},
+                        "model_id": mid,
+                        "provider_model_id": mid,
+                        "provider_id": "opencode-go" if mid in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or mid.startswith("muse") else "all",
+                        "model_type": "llm",
+                    })
+                    existing_model_ids.add(mid)
+            
             print(
-                f"Loaded {len(cfg['registered_resources']['models'])} model(s) from gateway: "
-                f"{[m['id'] for m in _models]}",
+                f"Active models in OGX: {sorted(list(existing_model_ids))}",
                 flush=True,
             )
-            if opencode_go_model_ids:
-                print(
-                    f"OpenCode Go models routed to opencode-go provider: {sorted(opencode_go_model_ids)}",
-                    flush=True,
-                )
     except Exception as _exc:
         print(
             f"WARNING: failed to fetch models from gateway ({_exc}); using static model list",
