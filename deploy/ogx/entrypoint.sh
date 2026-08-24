@@ -78,6 +78,7 @@ if gateway_models_url:
                 "mimo-v2.5-pro",
                 "mimo-v2.5",
                 "ox-alpha-free",
+                "hy3",
                 "gpt-5.6-luna",
                 "grok-4.5",
                 "muse-spark-1.2",
