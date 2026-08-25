@@ -136,7 +136,18 @@ if ogx_auth_endpoint:
         flush=True,
     )
 
-# Optional Postgres: switch both backends when POSTGRES_HOST is provided.
+# Optional Postgres: switch both backends when POSTGRES_HOST or DATABASE_URL is provided.
+pg_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRESQL_URL") or os.environ.get("SUPABASE_DATABASE_URL")
+if pg_url and not os.environ.get("POSTGRES_HOST"):
+    from urllib.parse import urlparse
+    parsed = urlparse(pg_url)
+    if parsed.hostname:
+        os.environ["POSTGRES_HOST"] = parsed.hostname
+        os.environ["POSTGRES_PORT"] = str(parsed.port or 5432)
+        os.environ["POSTGRES_USER"] = parsed.username or "postgres"
+        os.environ["POSTGRES_PASSWORD"] = parsed.password or ""
+        os.environ["POSTGRES_DB"] = (parsed.path or "/postgres").lstrip("/")
+
 if os.environ.get("POSTGRES_HOST"):
     pg = {
         "host": os.environ["POSTGRES_HOST"],
@@ -158,6 +169,12 @@ if os.environ.get("POSTGRES_HOST"):
         "type": "sql_postgres",
         **pg,
     }
+    print(
+        f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']} (user: {pg['user']}, pool_size: {pg['pool_size']})",
+        flush=True,
+    )
+else:
+    print("OGX Postgres storage NOT enabled: falling back to local SQLite", flush=True)
 
 with open("/tmp/ogx-config.yaml", "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
