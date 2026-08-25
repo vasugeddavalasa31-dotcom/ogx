@@ -150,6 +150,17 @@ providers:
           num_writers: 4
       memory_config:
         default_vector_store_provider_id: sqlite-vec
+      # Background retention worker: deletes responses older than 30
+      # days so the durable SQL store does not grow without bound.
+      # Mirrors OpenAI's Responses API contract. Incremental
+      # children are materialized to self-contained snapshots
+      # before their parent is removed, so chains stay consistent
+      # for survivors. Set `enabled: false` to disable.
+      retention:
+        enabled: true
+        retention_seconds: 2592000   # 30 days
+        sweep_interval_seconds: 3600  # 1 hour
+        batch_size: 100
   skills:
   - provider_id: builtin
     provider_type: inline::builtin
