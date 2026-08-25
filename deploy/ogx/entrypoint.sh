@@ -143,21 +143,29 @@ if pg_url and not os.environ.get("POSTGRES_HOST"):
     parsed = urlparse(pg_url)
     if parsed.hostname:
         os.environ["POSTGRES_HOST"] = parsed.hostname
-        os.environ["POSTGRES_PORT"] = str(parsed.port or 5432)
+        os.environ["POSTGRES_PORT"] = str(parsed.port or (6543 if "pooler.supabase.com" in parsed.hostname else 5432))
         os.environ["POSTGRES_USER"] = parsed.username or "postgres"
         os.environ["POSTGRES_PASSWORD"] = parsed.password or ""
         os.environ["POSTGRES_DB"] = (parsed.path or "/postgres").lstrip("/")
 
 if os.environ.get("POSTGRES_HOST"):
+    host = os.environ["POSTGRES_HOST"]
+    # If using Supabase pooler, force port 6543 (Transaction Mode) so it doesn't hit the 15-client session mode limit
+    raw_port = int(os.environ.get("POSTGRES_PORT", "5432"))
+    if "pooler.supabase.com" in host and raw_port == 5432:
+        port = 6543
+    else:
+        port = raw_port
+
     pg = {
-        "host": os.environ["POSTGRES_HOST"],
-        "port": int(os.environ.get("POSTGRES_PORT", "5432")),
-        "db": os.environ.get("POSTGRES_DB", "ogx"),
-        "user": os.environ.get("POSTGRES_USER", "ogx"),
+        "host": host,
+        "port": port,
+        "db": os.environ.get("POSTGRES_DB", "postgres"),
+        "user": os.environ.get("POSTGRES_USER", "postgres"),
         "password": os.environ.get("POSTGRES_PASSWORD", ""),
-        "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "2")),
+        "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "1")),
         "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "2")),
-        "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "3600")),
+        "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "1800")),
         "pool_pre_ping": True,
     }
     cfg["storage"]["backends"]["kv_default"] = {
@@ -170,7 +178,7 @@ if os.environ.get("POSTGRES_HOST"):
         **pg,
     }
     print(
-        f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']} (user: {pg['user']}, pool_size: {pg['pool_size']})",
+        f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']} (user: {pg['user']}, pool_size: {pg['pool_size']}, max_overflow: {pg['max_overflow']})",
         flush=True,
     )
 else:
