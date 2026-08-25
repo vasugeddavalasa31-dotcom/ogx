@@ -184,6 +184,8 @@ if os.environ.get("POSTGRES_HOST"):
 else:
     print("OGX Postgres storage NOT enabled: falling back to local SQLite", flush=True)
 
+cfg.setdefault("server", {})["host"] = "0.0.0.0"
+
 with open("/tmp/ogx-config.yaml", "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 EOF
