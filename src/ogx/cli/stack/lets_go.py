@@ -242,7 +242,21 @@ def _add_file_search_and_responses(run_config: StackConfig) -> None:
                             "table_name": "responses",
                             "backend": "sql_default",
                         }
-                    }
+                    },
+                    # Background retention worker: deletes responses
+                    # older than 30 days so the durable SQL store does
+                    # not grow without bound. Mirrors OpenAI's
+                    # Responses API contract. Increment-children are
+                    # materialized to self-contained snapshots before
+                    # their parent is removed, so chains stay
+                    # consistent for survivors. Set
+                    # `retention.enabled: false` to disable.
+                    "retention": {
+                        "enabled": True,
+                        "retention_seconds": 30 * 24 * 60 * 60,  # 30d
+                        "sweep_interval_seconds": 60 * 60,        # 1h
+                        "batch_size": 100,
+                    },
                 },
             )
         )

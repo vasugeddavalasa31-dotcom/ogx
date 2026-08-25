@@ -206,6 +206,15 @@ class ResponsesStore:
             ColumnType.STRING,
         )
 
+        # Index used by the retention worker (see retention.py) to find and
+        # delete old responses without table-scanning. Created idempotently;
+        # older stores pick it up on next initialize().
+        await self.sql_store.create_index(
+            "idx_openai_responses_created_at",
+            self.reference.table_name,
+            ["created_at"],
+        )
+
         await self.sql_store.create_table(
             "conversation_messages",
             {
@@ -692,6 +701,88 @@ class ResponsesStore:
 
         await self.sql_store.delete(self.reference.table_name, where={"id": response_id})
         return OpenAIDeleteResponseObject(id=response_id)
+
+    async def purge_old_responses(
+        self,
+        retention_seconds: int,
+        batch_size: int = 100,
+    ) -> int:
+        """Delete responses older than `retention_seconds`, anchored to `created_at`.
+
+        Mirrors the OpenAI Responses API retention contract (~30 days). For each
+        candidate parent row, `_materialize_incremental_children` rewrites any
+        direct incremental children to bypass the about-to-be-deleted parent,
+        so the chain stays consistent for any descendant that survives.
+
+        Runs as a system-level operation (bypasses per-row access checks) so the
+        background worker can sweep across all tenants. Idempotent: re-running
+        with the same cutoff is a no-op.
+
+        :param retention_seconds: Age (in seconds) after which a response is
+            eligible for deletion. Must be > 0.
+        :param batch_size: Maximum number of candidate ids to fetch per pass.
+            Limits blast radius if the loop is interrupted.
+        :returns: Number of responses actually deleted.
+        """
+        if retention_seconds <= 0:
+            raise ValueError(f"retention_seconds must be > 0, got {retention_seconds}")
+
+        cutoff = int(time.time()) - retention_seconds
+        deleted = 0
+
+        while True:
+            # Fetch one page of candidate ids, oldest first, that are still
+            # older than the cutoff. Bypass the per-row access policy: the
+            # retention worker is a system-level sweep, not a user request.
+            rows = await self.sql_store.sql_store.fetch_all(
+                table=self.reference.table_name,
+                where={"created_at": {"<": cutoff}},
+                order_by=[("created_at", "asc")],
+                limit=batch_size,
+            )
+            if not rows.data:
+                return deleted
+
+            for row in rows.data:
+                response_id = row["id"]
+                try:
+                    # Use the existing delete path so any incremental
+                    # children are materialized before the row is removed.
+                    await self._delete_response_object_for_retention(response_id)
+                    deleted += 1
+                except Exception as exc:
+                    # Don't let one bad row poison the whole sweep. Log and
+                    # move on; the next pass will retry.
+                    logger.warning(
+                        "Retention: failed to delete response; skipping",
+                        response_id=response_id,
+                        error=str(exc),
+                    )
+            logger.info(
+                "Retention: deleted batch of old responses",
+                deleted=deleted,
+                batch_size=len(rows.data),
+                cutoff=cutoff,
+            )
+
+    async def _delete_response_object_for_retention(self, response_id: str) -> None:
+        """System-level variant of `delete_response_object` for the retention worker.
+
+        Same as the public delete (materialize incremental children, then
+        delete the row), but skips `check_access_for_rows` because the
+        worker is not operating on behalf of a user request.
+        """
+        _ephemeral_responses.pop(response_id, None)
+        row = await self.sql_store.fetch_one(
+            self.reference.table_name, where={"id": response_id}
+        )
+        if not row:
+            return
+        parent_response = _OpenAIResponseObjectWithInputAndMessages(**row["response_object"])
+        await self._materialize_incremental_children(parent_response)
+        await self.sql_store.delete(
+            self.reference.table_name, where={"id": response_id}
+        )
 
     async def update_response_object(
         self,

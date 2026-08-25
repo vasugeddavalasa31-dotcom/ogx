@@ -29,7 +29,7 @@ from ogx.core.task import (
     create_detached_background_task,
 )
 from ogx.log import get_logger
-from ogx.providers.inline.responses.builtin.config import CompactionConfig, MemoryConfig
+from ogx.providers.inline.responses.builtin.config import CompactionConfig, MemoryConfig, RetentionConfig
 from ogx.providers.inline.skills.builtin.manifest import parse_skill_manifest
 from ogx.providers.inline.skills.builtin.validation import _SKILL_MD
 from ogx.providers.utils.responses.responses_store import (
@@ -145,6 +145,7 @@ class OpenAIResponsesImpl:
         vector_stores_config: VectorStoresConfig | None = None,
         compaction_config=None,
         memory_config: MemoryConfig | None = None,
+        retention_config: RetentionConfig | None = None,
     ):
         self.inference_api = inference_api
         self.tool_groups_api = tool_groups_api
@@ -167,6 +168,8 @@ class OpenAIResponsesImpl:
 
         self.compaction_config = compaction_config or CompactionConfig()
         self.memory_config = memory_config or MemoryConfig()
+        self.retention_config = retention_config
+        self._retention_task: asyncio.Task | None = None
         self._background_queue: asyncio.Queue[_BackgroundWorkItem] = asyncio.Queue(maxsize=BACKGROUND_QUEUE_MAX_SIZE)
         self._background_worker_tasks: set[asyncio.Task] = set()
         self._background_response_tasks: dict[str, asyncio.Task] = {}
@@ -191,6 +194,49 @@ class OpenAIResponsesImpl:
             task = create_detached_background_task(self._background_worker())
             self._background_worker_tasks.add(task)
             task.add_done_callback(self._background_worker_tasks.discard)
+        self._ensure_retention_worker_started()
+
+    def _ensure_retention_worker_started(self) -> None:
+        """Start the retention worker if configured and not already running.
+
+        Idempotent: calling multiple times is a no-op. Started lazily on first
+        request (same pattern as the response-processing worker pool) so we
+        don't bind to a temporary init loop.
+        """
+        if self._retention_task is not None and not self._retention_task.done():
+            return
+        if self.retention_config is None or not self.retention_config.enabled:
+            return
+        self._retention_task = create_detached_background_task(
+            self._retention_worker_loop()
+        )
+
+    async def _retention_worker_loop(self) -> None:
+        """Periodically delete old responses to bound the SQL store size.
+
+        Mirrors OpenAI's 30-day retention contract. Failures are logged and
+        swallowed so a transient error in one sweep doesn't kill the worker.
+        """
+        assert self.retention_config is not None
+        interval = self.retention_config.sweep_interval_seconds
+        while True:
+            try:
+                deleted = await self.responses_store.purge_old_responses(
+                    retention_seconds=self.retention_config.retention_seconds,
+                    batch_size=self.retention_config.batch_size,
+                )
+                if deleted:
+                    logger.info(
+                        "Retention sweep deleted old responses",
+                        deleted=deleted,
+                        retention_seconds=self.retention_config.retention_seconds,
+                    )
+            except Exception:
+                logger.exception("Retention sweep failed; will retry next interval")
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
 
     async def shutdown(self) -> None:
         """Stop background worker pool."""
@@ -207,6 +253,9 @@ class OpenAIResponsesImpl:
         memory_write_task_list = list(self._memory_write_tasks.values())
         for task in memory_write_task_list:
             task.cancel()
+
+        if self._retention_task is not None:
+            self._retention_task.cancel()
 
         # Wait for all tasks to complete
         all_tasks = list(self._background_worker_tasks) + response_task_list + memory_write_task_list

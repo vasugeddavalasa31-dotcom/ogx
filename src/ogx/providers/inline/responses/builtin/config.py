@@ -254,6 +254,13 @@ class BuiltinResponsesImplConfig(BaseModel):
         "and never exposed to clients.",
     )
 
+    retention: "RetentionConfig | None" = Field(
+        default=None,
+        description="Background retention worker config. When set, OGX deletes "
+        "responses older than the configured window so the SQL store does not "
+        "grow unbounded. Mirrors OpenAI's 30-day default.",
+    )
+
     @classmethod
     def sample_run_config(cls, __distro_dir__: str) -> dict[str, Any]:
         return {
@@ -264,3 +271,37 @@ class BuiltinResponsesImplConfig(BaseModel):
                 ).model_dump(exclude_none=True),
             }
         }
+
+
+class RetentionConfig(BaseModel):
+    """Background retention worker for the durable Responses SQL store.
+
+    Mirrors OpenAI's default behavior: every response is retained for a fixed
+    window and then deleted. Without this the SQL store grows without bound.
+
+    The worker is a no-op unless `BuiltinResponsesImplConfig.retention` is set.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="When false, the retention worker does not start. Defaults to "
+        "true so the worker runs whenever RetentionConfig is configured.",
+    )
+    retention_seconds: int = Field(
+        default=30 * 24 * 60 * 60,  # 30 days, matching OpenAI
+        gt=0,
+        description="Age (in seconds) after which a stored response is eligible for "
+        "deletion. Default is 30 days to match OpenAI's Responses API contract.",
+    )
+    sweep_interval_seconds: int = Field(
+        default=60 * 60,  # 1 hour
+        gt=0,
+        description="How often the retention worker runs. Default is hourly; lower this "
+        "for higher-throughput deployments if the store grows quickly.",
+    )
+    batch_size: int = Field(
+        default=100,
+        gt=0,
+        description="Maximum number of candidate ids fetched per sweep batch. Caps the "
+        "blast radius if the loop is interrupted.",
+    )
