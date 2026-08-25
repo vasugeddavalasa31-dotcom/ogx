@@ -144,8 +144,8 @@ if os.environ.get("POSTGRES_HOST"):
         "db": os.environ.get("POSTGRES_DB", "ogx"),
         "user": os.environ.get("POSTGRES_USER", "ogx"),
         "password": os.environ.get("POSTGRES_PASSWORD", ""),
-        "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "10")),
-        "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "20")),
+        "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "2")),
+        "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "2")),
         "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "3600")),
         "pool_pre_ping": True,
     }
