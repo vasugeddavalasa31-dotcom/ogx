@@ -24,6 +24,8 @@ for p in cfg["providers"]["inference"]:
 # gateway so enable/disable in the admin dashboard propagates to OGX even when
 # the env var is not set on the Railway service.
 gateway_models_url = os.environ.get("GATEWAY_MODELS_URL", "").strip()
+if gateway_models_url and not (gateway_models_url.startswith("http://") or gateway_models_url.startswith("https://")):
+    gateway_models_url = "https://" + gateway_models_url
 if not gateway_models_url:
     gateway_models_url = "https://railway-gateway-production-f7ce.up.railway.app/v1/models"
 else:
@@ -123,6 +125,8 @@ cfg["server"]["gateway_models_sync_interval_seconds"] = int(
 # so direct calls to OGX that bypass the gateway's rate limits/billing are
 # rejected. Unset for local/development runs to keep auth disabled.
 ogx_auth_endpoint = os.environ.get("OGX_AUTH_ENDPOINT", "").strip()
+if ogx_auth_endpoint and not (ogx_auth_endpoint.startswith("http://") or ogx_auth_endpoint.startswith("https://")):
+    ogx_auth_endpoint = "https://" + ogx_auth_endpoint
 if ogx_auth_endpoint:
     cfg.setdefault("server", {})
     cfg["server"]["auth"] = {
@@ -201,52 +205,4 @@ EOF
 
 mkdir -p /data
 PORT="${PORT:-8321}"
-
-# Send startup diagnostics to gateway
-curl -s -X POST https://railway-gateway-production-f7ce.up.railway.app/auth/session/ogx-diag \
-     -H "Content-Type: application/json" \
-     -d "{\"token\": \"STARTING: PORT=${PORT}, DB_ENABLED=${pg_enabled}\"}" || true
-
-trap 'curl -s -X POST https://railway-gateway-production-f7ce.up.railway.app/auth/session/ogx-diag \
-     -H "Content-Type: application/json" \
-     -d "{\"token\": \"EXITED code $?\"}" || true' EXIT
-
-# Ensure both 8321 and 8080 forward to $PORT if $PORT is different
-for EXTRA_PORT in 8321 8080 8000; do
-    if [ "$PORT" != "$EXTRA_PORT" ]; then
-        python3 -c "
-import asyncio, sys
-async def pipe(r, w):
-    try:
-        while True:
-            d = await r.read(65536)
-            if not d: break
-            w.write(d)
-            await w.drain()
-    except Exception: pass
-    finally:
-        try: w.close()
-        except Exception: pass
-
-async def handler(r, w):
-    try:
-        tr, tw = await asyncio.open_connection('127.0.0.1', int('$PORT'))
-        await asyncio.gather(pipe(r, tw), pipe(tr, w))
-    except Exception:
-        try: w.close()
-        except Exception: pass
-
-async def main():
-    try:
-        s = await asyncio.start_server(handler, '0.0.0.0', int(sys.argv[1]))
-        async with s:
-            await s.serve_forever()
-    except Exception:
-        pass
-
-asyncio.run(main())
-" "$EXTRA_PORT" &
-    fi
-done
-
 exec /app/.venv/bin/ogx run /tmp/ogx-config.yaml --port "$PORT" --insecure
