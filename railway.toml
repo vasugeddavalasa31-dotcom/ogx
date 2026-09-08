@@ -2,7 +2,7 @@
 # would otherwise guess wrong and fail with "no start command").
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "deploy/ogx/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
