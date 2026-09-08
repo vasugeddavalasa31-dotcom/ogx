@@ -24,29 +24,41 @@ log = get_logger(name=__name__, category="core")
 
 # Context variable for request provider data and auth attributes
 PROVIDER_DATA_VAR: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("provider_data", default=None)
+# Context variable for raw request headers
+REQUEST_HEADERS_VAR: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar("request_headers", default=None)
 
 
 class RequestProviderDataContext(AbstractContextManager[None]):
     """Context manager for request provider data"""
 
-    def __init__(self, provider_data: dict[str, Any] | None = None, user: User | None = None) -> None:
+    def __init__(
+        self,
+        provider_data: dict[str, Any] | None = None,
+        user: User | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         if provider_data is not None and not isinstance(provider_data, dict):
             log.error("Provider data must be a JSON object")
             provider_data = None
         self.provider_data = provider_data or {}
         if user:
             self.provider_data["__authenticated_user"] = user
+        self.headers = headers or {}
 
         self.token: contextvars.Token[dict[str, Any] | None] | None = None
+        self.headers_token: contextvars.Token[dict[str, str] | None] | None = None
 
     def __enter__(self) -> None:
         # Save the current value and set the new one
         self.token = PROVIDER_DATA_VAR.set(self.provider_data)
+        self.headers_token = REQUEST_HEADERS_VAR.set(self.headers)
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Restore the previous value
         if self.token is not None:
             PROVIDER_DATA_VAR.reset(self.token)
+        if self.headers_token is not None:
+            REQUEST_HEADERS_VAR.reset(self.headers_token)
 
 
 class NeedsRequestProviderData:
@@ -119,7 +131,7 @@ def request_provider_data_context(headers: dict[str, str], user: User | None = N
     provider_data = parse_request_provider_data(headers)
     if user is None and provider_data is not None:
         user = _test_authenticated_user_from_provider_data(provider_data)
-    return RequestProviderDataContext(provider_data, user)
+    return RequestProviderDataContext(provider_data, user, headers=headers)
 
 
 def _test_authenticated_user_from_provider_data(provider_data: dict[str, Any]) -> User | None:
@@ -140,6 +152,11 @@ def _test_authenticated_user_from_provider_data(provider_data: dict[str, Any]) -
     except (KeyError, TypeError, ValueError) as e:
         log.warning("Ignoring invalid test authenticated user provider data", error=str(e))
         return None
+
+
+def get_request_headers() -> dict[str, str]:
+    """Helper to retrieve raw incoming request headers from context"""
+    return REQUEST_HEADERS_VAR.get() or {}
 
 
 def get_authenticated_user() -> User | None:

@@ -4,9 +4,14 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
+import contextvars
+import hashlib
+import uuid
 import warnings
 from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
+from ogx.core.request_headers import get_request_headers
 from ogx.log import get_logger
 from ogx.providers.utils.inference.openai_mixin import OpenAIMixin
 from ogx_api import (
@@ -17,6 +22,8 @@ from ogx_api import (
     OpenAIChatCompletionChunkWithReasoning,
     OpenAIChatCompletionRequestWithExtraBody,
     OpenAIChatCompletionWithReasoning,
+    OpenAICompletion,
+    OpenAICompletionRequestWithExtraBody,
 )
 
 from .config import OpenAIConfig
@@ -43,6 +50,53 @@ _MODEL_MAX_OUTPUT_TOKENS: dict[str, int] = {
 }
 
 _WARNED_MODELS: set[str] = set()
+
+_CURRENT_OPENCODE_SESSION_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_CURRENT_OPENCODE_SESSION_ID", default=None
+)
+
+
+def _derive_session_id(params: Any, raw_headers: dict[str, str]) -> str:
+    """Stably derive a session ID for OpenCode Go prompt routing and caching."""
+    # 1. Check incoming HTTP headers
+    for hk, hv in raw_headers.items():
+        if hk.lower() in ("x-opencode-session", "x-session-id") and hv:
+            return str(hv).strip()
+
+    if params is not None:
+        # 2. Check model_extra or extra_body
+        model_extra = getattr(params, "model_extra", None) or {}
+        for k in ("x-opencode-session", "opencode_session", "session_id"):
+            if k in model_extra and model_extra[k]:
+                return str(model_extra[k]).strip()
+
+        # 3. Check prompt_cache_key
+        if getattr(params, "prompt_cache_key", None):
+            return str(params.prompt_cache_key).strip()
+
+        # 4. Check user identifier
+        if getattr(params, "user", None):
+            return f"orbiterx-{params.user}".strip()
+
+        # 5. Stable hash of the first user message for multi-turn session stickiness
+        messages = getattr(params, "messages", None) or []
+        for msg in messages:
+            role = getattr(msg, "role", None) or (msg.get("role") if isinstance(msg, dict) else None)
+            if role == "user":
+                content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else None)
+                if content:
+                    text = str(content)
+                    h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+                    return f"orbiterx-{h}"
+
+        # 6. Prompt text if standard completion
+        prompt = getattr(params, "prompt", None)
+        if prompt:
+            text = str(prompt)
+            h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+            return f"orbiterx-{h}"
+
+    return f"orbiterx-{uuid.uuid4().hex[:16]}"
 
 
 #
@@ -110,7 +164,42 @@ class OpenAIInferenceAdapter(OpenAIMixin):
                 metadata["max_output_tokens"] = max_output_tokens
                 model = model.model_copy(update={"metadata": metadata})
 
-        return model
+    def _is_opencode_go(self) -> bool:
+        base_url = str(self.config.base_url or "").lower()
+        provider_id = getattr(self, "__provider_id__", "")
+        return "opencode.ai" in base_url or provider_id == "opencode-go"
+
+    def get_extra_client_params(self) -> dict[str, Any]:
+        params = dict(super().get_extra_client_params())
+        if self._is_opencode_go():
+            default_headers = dict(params.get("default_headers") or {})
+            default_headers.setdefault("User-Agent", "OrbiterX/1.0")
+            default_headers.setdefault("x-opencode-session", f"orbiterx-default-{uuid.uuid4().hex[:12]}")
+            params["default_headers"] = default_headers
+        return params
+
+    def _get_extra_request_headers(self) -> dict[str, str] | None:
+        headers = dict(super()._get_extra_request_headers() or {})
+        if self._is_opencode_go():
+            session_id = _CURRENT_OPENCODE_SESSION_ID.get()
+            if not session_id:
+                session_id = _derive_session_id(None, get_request_headers())
+            headers["x-opencode-session"] = session_id
+            headers.setdefault("User-Agent", "OrbiterX/1.0")
+        return headers or None
+
+    async def openai_completion(
+        self,
+        params: OpenAICompletionRequestWithExtraBody,
+    ) -> OpenAICompletion | AsyncIterator[OpenAICompletion]:
+        if self._is_opencode_go():
+            session_id = _derive_session_id(params, get_request_headers())
+            token = _CURRENT_OPENCODE_SESSION_ID.set(session_id)
+            try:
+                return await super().openai_completion(params)
+            finally:
+                _CURRENT_OPENCODE_SESSION_ID.reset(token)
+        return await super().openai_completion(params)
 
     async def openai_chat_completion(
         self,
@@ -141,6 +230,14 @@ class OpenAIInferenceAdapter(OpenAIMixin):
                     updated_params = updated_params.model_copy()
                 updated_params.max_completion_tokens = max_output_tokens
             params = updated_params
+
+        if self._is_opencode_go():
+            session_id = _derive_session_id(params, get_request_headers())
+            token = _CURRENT_OPENCODE_SESSION_ID.set(session_id)
+            try:
+                return await super().openai_chat_completion(params)
+            finally:
+                _CURRENT_OPENCODE_SESSION_ID.reset(token)
 
         return await super().openai_chat_completion(params)
 
