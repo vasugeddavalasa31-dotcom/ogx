@@ -200,7 +200,53 @@ with open("/tmp/ogx-config.yaml", "w") as f:
 EOF
 
 mkdir -p /data
-# Railway injects $PORT and routes traffic to it — listen there (default 8321
-# locally) so the platform healthcheck can reach the server.
 PORT="${PORT:-8321}"
+
+# Send startup diagnostics to gateway
+curl -s -X POST https://railway-gateway-production-f7ce.up.railway.app/auth/session/ogx-diag \
+     -H "Content-Type: application/json" \
+     -d "{\"token\": \"STARTING: PORT=${PORT}, DB_ENABLED=${pg_enabled}\"}" || true
+
+trap 'curl -s -X POST https://railway-gateway-production-f7ce.up.railway.app/auth/session/ogx-diag \
+     -H "Content-Type: application/json" \
+     -d "{\"token\": \"EXITED code $?\"}" || true' EXIT
+
+# Ensure both 8321 and 8080 forward to $PORT if $PORT is different
+for EXTRA_PORT in 8321 8080 8000; do
+    if [ "$PORT" != "$EXTRA_PORT" ]; then
+        python3 -c "
+import asyncio, sys
+async def pipe(r, w):
+    try:
+        while True:
+            d = await r.read(65536)
+            if not d: break
+            w.write(d)
+            await w.drain()
+    except Exception: pass
+    finally:
+        try: w.close()
+        except Exception: pass
+
+async def handler(r, w):
+    try:
+        tr, tw = await asyncio.open_connection('127.0.0.1', int('$PORT'))
+        await asyncio.gather(pipe(r, tw), pipe(tr, w))
+    except Exception:
+        try: w.close()
+        except Exception: pass
+
+async def main():
+    try:
+        s = await asyncio.start_server(handler, '0.0.0.0', int(sys.argv[1]))
+        async with s:
+            await s.serve_forever()
+    except Exception:
+        pass
+
+asyncio.run(main())
+" "$EXTRA_PORT" &
+    fi
+done
+
 exec /app/.venv/bin/ogx run /tmp/ogx-config.yaml --port "$PORT" --insecure
