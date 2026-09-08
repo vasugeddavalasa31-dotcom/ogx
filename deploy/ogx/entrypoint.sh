@@ -162,10 +162,24 @@ if os.environ.get("POSTGRES_HOST"):
     else:
         port = raw_port
 
-    import socket
+    import asyncio
     try:
-        s = socket.create_connection((host, port), timeout=2.0)
-        s.close()
+        import asyncpg
+        async def _test_pg():
+            conn = await asyncio.wait_for(
+                asyncpg.connect(
+                    host=host,
+                    port=port,
+                    user=os.environ.get("POSTGRES_USER", "postgres"),
+                    password=os.environ.get("POSTGRES_PASSWORD", ""),
+                    database=os.environ.get("POSTGRES_DB", "postgres"),
+                    timeout=3.0,
+                ),
+                timeout=4.0,
+            )
+            await conn.fetchval("SELECT 1")
+            await conn.close()
+        asyncio.run(_test_pg())
         pg = {
             "host": host,
             "port": port,
@@ -192,7 +206,7 @@ if os.environ.get("POSTGRES_HOST"):
             flush=True,
         )
     except Exception as _pge:
-        print(f"WARNING: Postgres {host}:{port} unreachable ({_pge}) — falling back to local SQLite", flush=True)
+        print(f"WARNING: Postgres {host}:{port} check failed ({_pge}) — falling back to local SQLite", flush=True)
 
 if not pg_enabled:
     print("OGX Postgres storage NOT enabled: falling back to local SQLite", flush=True)
