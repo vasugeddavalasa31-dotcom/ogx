@@ -951,7 +951,10 @@ async def refresh_registry_once(impls: dict[Api, Any]):
     logger.debug("refreshing registry")
     routing_tables = [v for v in impls.values() if isinstance(v, CommonRoutingTableImpl)]
     for routing_table in routing_tables:
-        await routing_table.refresh()
+        try:
+            await asyncio.wait_for(routing_table.refresh(), timeout=3.0)
+        except Exception as e:
+            logger.warning("Routing table refresh skipped or timed out during boot", error=str(e))
 
 
 async def refresh_registry_task(impls: dict[Api, Any], interval_seconds: int = REGISTRY_REFRESH_INTERVAL_SECONDS):

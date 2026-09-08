@@ -5,7 +5,23 @@ set -euo pipefail
 python3 - <<'EOF'
 import os, yaml
 
-cfg = yaml.safe_load(open("/app/config.template.yaml"))
+template_paths = [
+    "/app/config.template.yaml",
+    "deploy/ogx/config.template.yaml",
+    os.path.join(os.path.dirname(os.path.abspath(__file__ if "__file__" in locals() else ".")), "deploy/ogx/config.template.yaml"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__ if "__file__" in locals() else ".")), "config.template.yaml"),
+]
+template_file = None
+for p in template_paths:
+    if os.path.exists(p):
+        template_file = p
+        break
+if not template_file:
+    raise RuntimeError(f"Cannot find config.template.yaml in candidate locations: {template_paths}")
+
+print(f"Loading config template from: {template_file}", flush=True)
+with open(template_file) as f:
+    cfg = yaml.safe_load(f)
 
 for p in cfg["providers"]["inference"]:
     if p.get("provider_id") == "openai":
@@ -140,76 +156,96 @@ if ogx_auth_endpoint:
         flush=True,
     )
 
-# Optional Postgres: switch both backends when POSTGRES_HOST or DATABASE_URL is provided.
-pg_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRESQL_URL") or os.environ.get("SUPABASE_DATABASE_URL")
-if pg_url and not os.environ.get("POSTGRES_HOST"):
-    from urllib.parse import urlparse
-    parsed = urlparse(pg_url)
-    if parsed.hostname:
-        os.environ["POSTGRES_HOST"] = parsed.hostname
-        os.environ["POSTGRES_PORT"] = str(parsed.port or (6543 if "pooler.supabase.com" in parsed.hostname else 5432))
-        os.environ["POSTGRES_USER"] = parsed.username or "postgres"
-        os.environ["POSTGRES_PASSWORD"] = parsed.password or ""
-        os.environ["POSTGRES_DB"] = (parsed.path or "/postgres").lstrip("/")
+# Storage configuration:
+# Default to SQLite for guaranteed zero-network instant boot and high reliability.
+# Only attempt Postgres when explicitly enabled via OGX_USE_POSTGRES=1 / true.
+# (Railway projects frequently inject DATABASE_URL into all services, which previously
+# caused connection exhaustion and boot hangs when hitting transaction poolers).
+use_postgres = os.environ.get("OGX_USE_POSTGRES", "").lower() in ("1", "true", "yes")
+
+db_dir = "/data"
+try:
+    os.makedirs(db_dir, exist_ok=True)
+    test_file = os.path.join(db_dir, ".write_test")
+    with open(test_file, "w") as f:
+        f.write("ok")
+    os.remove(test_file)
+except Exception:
+    db_dir = "/tmp"
+
+cfg.setdefault("storage", {}).setdefault("backends", {})
+cfg["storage"]["backends"]["kv_default"] = {
+    "type": "kv_sqlite",
+    "db_path": f"{db_dir}/ogx_kvstore.db",
+}
+cfg["storage"]["backends"]["sql_default"] = {
+    "type": "sql_sqlite",
+    "db_path": f"{db_dir}/ogx_sqlstore.db",
+}
 
 pg_enabled = False
-if os.environ.get("POSTGRES_HOST"):
-    host = os.environ["POSTGRES_HOST"]
-    # If using Supabase pooler, force port 6543 (Transaction Mode) so it doesn't hit the 15-client session mode limit
-    raw_port = int(os.environ.get("POSTGRES_PORT", "5432"))
-    if "pooler.supabase.com" in host and raw_port == 5432:
-        port = 6543
-    else:
-        port = raw_port
+if use_postgres:
+    pg_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRESQL_URL") or os.environ.get("SUPABASE_DATABASE_URL")
+    if pg_url and not os.environ.get("POSTGRES_HOST"):
+        from urllib.parse import urlparse
+        parsed = urlparse(pg_url)
+        if parsed.hostname:
+            os.environ["POSTGRES_HOST"] = parsed.hostname
+            os.environ["POSTGRES_PORT"] = str(parsed.port or (6543 if "pooler.supabase.com" in parsed.hostname else 5432))
+            os.environ["POSTGRES_USER"] = parsed.username or "postgres"
+            os.environ["POSTGRES_PASSWORD"] = parsed.password or ""
+            os.environ["POSTGRES_DB"] = (parsed.path or "/postgres").lstrip("/")
 
-    import asyncio
-    try:
-        import asyncpg
-        async def _test_pg():
-            conn = await asyncio.wait_for(
-                asyncpg.connect(
-                    host=host,
-                    port=port,
-                    user=os.environ.get("POSTGRES_USER", "postgres"),
-                    password=os.environ.get("POSTGRES_PASSWORD", ""),
-                    database=os.environ.get("POSTGRES_DB", "postgres"),
-                    timeout=3.0,
-                ),
-                timeout=4.0,
-            )
-            await conn.fetchval("SELECT 1")
-            await conn.close()
-        asyncio.run(_test_pg())
-        pg = {
-            "host": host,
-            "port": port,
-            "db": os.environ.get("POSTGRES_DB", "postgres"),
-            "user": os.environ.get("POSTGRES_USER", "postgres"),
-            "password": os.environ.get("POSTGRES_PASSWORD", ""),
-            "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "1")),
-            "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "2")),
-            "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "1800")),
-            "pool_pre_ping": True,
-        }
-        cfg["storage"]["backends"]["kv_default"] = {
-            "type": "kv_postgres",
-            "table_name": "ogx_kvstore",
-            **pg,
-        }
-        cfg["storage"]["backends"]["sql_default"] = {
-            "type": "sql_postgres",
-            **pg,
-        }
-        pg_enabled = True
-        print(
-            f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']} (user: {pg['user']}, pool_size: {pg['pool_size']}, max_overflow: {pg['max_overflow']})",
-            flush=True,
-        )
-    except Exception as _pge:
-        print(f"WARNING: Postgres {host}:{port} check failed ({_pge}) — falling back to local SQLite", flush=True)
+    if os.environ.get("POSTGRES_HOST"):
+        host = os.environ["POSTGRES_HOST"]
+        raw_port = int(os.environ.get("POSTGRES_PORT", "5432"))
+        port = 6543 if ("pooler.supabase.com" in host and raw_port == 5432) else raw_port
+
+        import asyncio
+        try:
+            import asyncpg
+            async def _test_pg():
+                conn = await asyncio.wait_for(
+                    asyncpg.connect(
+                        host=host,
+                        port=port,
+                        user=os.environ.get("POSTGRES_USER", "postgres"),
+                        password=os.environ.get("POSTGRES_PASSWORD", ""),
+                        database=os.environ.get("POSTGRES_DB", "postgres"),
+                        timeout=3.0,
+                    ),
+                    timeout=4.0,
+                )
+                await conn.fetchval("SELECT 1")
+                await conn.close()
+            asyncio.run(_test_pg())
+            pg = {
+                "host": host,
+                "port": port,
+                "db": os.environ.get("POSTGRES_DB", "postgres"),
+                "user": os.environ.get("POSTGRES_USER", "postgres"),
+                "password": os.environ.get("POSTGRES_PASSWORD", ""),
+                "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "1")),
+                "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "2")),
+                "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "1800")),
+                "pool_pre_ping": True,
+            }
+            cfg["storage"]["backends"]["kv_default"] = {
+                "type": "kv_postgres",
+                "table_name": "ogx_kvstore",
+                **pg,
+            }
+            cfg["storage"]["backends"]["sql_default"] = {
+                "type": "sql_postgres",
+                **pg,
+            }
+            pg_enabled = True
+            print(f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']}", flush=True)
+        except Exception as _pge:
+            print(f"WARNING: Postgres {host}:{port} check failed ({_pge}) — using SQLite", flush=True)
 
 if not pg_enabled:
-    print("OGX Postgres storage NOT enabled: falling back to local SQLite", flush=True)
+    print(f"OGX local SQLite storage active (directory: {db_dir})", flush=True)
 
 cfg.setdefault("server", {})["host"] = "0.0.0.0"
 
@@ -217,6 +253,23 @@ with open("/tmp/ogx-config.yaml", "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 EOF
 
-mkdir -p /data
+mkdir -p /data 2>/dev/null || true
+
+OGX_BIN="/app/.venv/bin/ogx"
+if [ ! -x "$OGX_BIN" ]; then
+    OGX_BIN="$(which ogx 2>/dev/null || true)"
+fi
+if [ -z "$OGX_BIN" ] || [ ! -x "$OGX_BIN" ]; then
+    if [ -x ".venv/bin/ogx" ]; then
+        OGX_BIN=".venv/bin/ogx"
+    fi
+fi
+
 PORT="${PORT:-8321}"
-exec /app/.venv/bin/ogx run /tmp/ogx-config.yaml --port "$PORT" --insecure
+echo "Starting OGX server on port $PORT..."
+if [ -n "$OGX_BIN" ] && [ -x "$OGX_BIN" ]; then
+    exec "$OGX_BIN" run /tmp/ogx-config.yaml --port "$PORT" --insecure
+else
+    export PYTHONPATH="${PYTHONPATH:-}:src"
+    exec python3 -m ogx.cli.stack.run run /tmp/ogx-config.yaml --port "$PORT" --insecure
+fi
