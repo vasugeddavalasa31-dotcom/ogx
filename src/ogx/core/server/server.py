@@ -534,6 +534,13 @@ def create_app() -> StackApp:
     app.exception_handler(ResourceNotFoundError)(global_exception_handler)
     app.exception_handler(AuthenticationRequiredError)(global_exception_handler)
     app.exception_handler(AccessDeniedError)(global_exception_handler)
+
+    @app.get("/health")
+    @app.get("/healthz")
+    @app.get("/ping")
+    async def health_check():
+        return {"status": "ok"}
+
     # Dedicated Codex Search Endpoint (/v1/alpha/search)
     @app.post("/v1/alpha/search")
     async def ogx_alpha_search(request: Request):
