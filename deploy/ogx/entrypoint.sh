@@ -41,11 +41,11 @@ if gateway_models_url:
 
         def _open(url):
             try:
-                return _request.urlopen(url, timeout=3)
+                return _request.urlopen(url, timeout=1)
             except Exception:
                 # Trusted internal gateway; base image may lack its CA chain.
                 ctx = _ssl._create_unverified_context()
-                return _request.urlopen(url, timeout=3, context=ctx)
+                return _request.urlopen(url, timeout=1, context=ctx)
 
         with _open(gateway_models_url) as _resp:
             _data = _json.load(_resp)
