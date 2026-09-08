@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 import httpx
+from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ogx.core.access_control.conditions import User as ProtocolUser
@@ -130,6 +131,15 @@ class AuthenticationMiddleware:
                 if webmethod and webmethod.require_authentication is False:
                     logger.debug("Allowing unauthenticated access to endpoint", path=path)
                     return await self.app(scope, receive, send)
+
+            # Operational endpoints and healthchecks bypass auth unconditionally
+            if path in ("/health", "/healthz", "/ping"):
+                response = JSONResponse(status_code=200, content={"status": "ok"})
+                return await response(scope, receive, send)
+
+            # Allow public model discovery and Railway healthcheck
+            if not is_websocket and method == "GET" and path in ("/v1/models", "/models"):
+                return await self.app(scope, receive, send)
 
             # Handle authentication
             if self.auth_provider.requires_http_bearer:

@@ -5,7 +5,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "deploy/ogx/Dockerfile"
 
 [deploy]
-healthcheckPath = "/v1/models"
+healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
