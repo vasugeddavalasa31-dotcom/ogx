@@ -53,16 +53,21 @@ class PostgresKVStoreImpl(KVStore):
 
         if self._pool is None:
             try:
-                self._pool = await asyncpg.create_pool(
-                    host=self.config.host,
-                    port=int(self.config.port),
-                    database=self.config.db,
-                    user=self.config.user,
-                    password=self.config.password.get_secret_value() if self.config.password else None,
-                    ssl=self._build_ssl(),
-                    min_size=self.config.pool_size,
-                    max_size=self.config.pool_size + self.config.max_overflow,
-                    command_timeout=self.config.command_timeout,
+                self._pool = await asyncio.wait_for(
+                    asyncpg.create_pool(
+                        host=self.config.host,
+                        port=int(self.config.port),
+                        database=self.config.db,
+                        user=self.config.user,
+                        password=self.config.password.get_secret_value() if self.config.password else None,
+                        ssl=self._build_ssl(),
+                        min_size=self.config.pool_size,
+                        max_size=self.config.pool_size + self.config.max_overflow,
+                        command_timeout=self.config.command_timeout,
+                        # Prevent indefinite hang when the host is unreachable at startup
+                        timeout=10,
+                    ),
+                    timeout=15,  # hard asyncio-level guard on top of asyncpg's own timeout
                 )
                 self._loop = loop
             except Exception as e:

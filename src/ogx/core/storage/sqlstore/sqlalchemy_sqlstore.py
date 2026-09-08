@@ -140,6 +140,8 @@ class SqlAlchemySqlStoreImpl(SqlStore):
             engine_kwargs["max_overflow"] = self.config.max_overflow
             if self.config.pool_recycle >= 0:
                 engine_kwargs["pool_recycle"] = self.config.pool_recycle
+            # Prevent indefinite hang when Postgres host is unreachable at startup
+            connect_args["connect_timeout"] = 10
 
         engine = create_async_engine(
             self.config.engine_str,
