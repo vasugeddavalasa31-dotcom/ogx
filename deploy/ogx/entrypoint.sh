@@ -39,11 +39,11 @@ if gateway_models_url:
 
         def _open(url):
             try:
-                return _request.urlopen(url, timeout=10)
+                return _request.urlopen(url, timeout=3)
             except Exception:
                 # Trusted internal gateway; base image may lack its CA chain.
                 ctx = _ssl._create_unverified_context()
-                return _request.urlopen(url, timeout=10, context=ctx)
+                return _request.urlopen(url, timeout=3, context=ctx)
 
         with _open(gateway_models_url) as _resp:
             _data = _json.load(_resp)
@@ -148,6 +148,7 @@ if pg_url and not os.environ.get("POSTGRES_HOST"):
         os.environ["POSTGRES_PASSWORD"] = parsed.password or ""
         os.environ["POSTGRES_DB"] = (parsed.path or "/postgres").lstrip("/")
 
+pg_enabled = False
 if os.environ.get("POSTGRES_HOST"):
     host = os.environ["POSTGRES_HOST"]
     # If using Supabase pooler, force port 6543 (Transaction Mode) so it doesn't hit the 15-client session mode limit
@@ -157,31 +158,39 @@ if os.environ.get("POSTGRES_HOST"):
     else:
         port = raw_port
 
-    pg = {
-        "host": host,
-        "port": port,
-        "db": os.environ.get("POSTGRES_DB", "postgres"),
-        "user": os.environ.get("POSTGRES_USER", "postgres"),
-        "password": os.environ.get("POSTGRES_PASSWORD", ""),
-        "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "1")),
-        "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "2")),
-        "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "1800")),
-        "pool_pre_ping": True,
-    }
-    cfg["storage"]["backends"]["kv_default"] = {
-        "type": "kv_postgres",
-        "table_name": "ogx_kvstore",
-        **pg,
-    }
-    cfg["storage"]["backends"]["sql_default"] = {
-        "type": "sql_postgres",
-        **pg,
-    }
-    print(
-        f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']} (user: {pg['user']}, pool_size: {pg['pool_size']}, max_overflow: {pg['max_overflow']})",
-        flush=True,
-    )
-else:
+    import socket
+    try:
+        s = socket.create_connection((host, port), timeout=2.0)
+        s.close()
+        pg = {
+            "host": host,
+            "port": port,
+            "db": os.environ.get("POSTGRES_DB", "postgres"),
+            "user": os.environ.get("POSTGRES_USER", "postgres"),
+            "password": os.environ.get("POSTGRES_PASSWORD", ""),
+            "pool_size": int(os.environ.get("POSTGRES_POOL_SIZE", "1")),
+            "max_overflow": int(os.environ.get("POSTGRES_MAX_OVERFLOW", "2")),
+            "pool_recycle": int(os.environ.get("POSTGRES_POOL_RECYCLE", "1800")),
+            "pool_pre_ping": True,
+        }
+        cfg["storage"]["backends"]["kv_default"] = {
+            "type": "kv_postgres",
+            "table_name": "ogx_kvstore",
+            **pg,
+        }
+        cfg["storage"]["backends"]["sql_default"] = {
+            "type": "sql_postgres",
+            **pg,
+        }
+        pg_enabled = True
+        print(
+            f"OGX Postgres storage enabled: {pg['host']}:{pg['port']}/{pg['db']} (user: {pg['user']}, pool_size: {pg['pool_size']}, max_overflow: {pg['max_overflow']})",
+            flush=True,
+        )
+    except Exception as _pge:
+        print(f"WARNING: Postgres {host}:{port} unreachable ({_pge}) — falling back to local SQLite", flush=True)
+
+if not pg_enabled:
     print("OGX Postgres storage NOT enabled: falling back to local SQLite", flush=True)
 
 cfg.setdefault("server", {})["host"] = "0.0.0.0"

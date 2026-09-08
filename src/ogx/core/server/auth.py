@@ -112,6 +112,15 @@ class AuthenticationMiddleware:
             path = scope.get("path", "")
             method = scope.get("method", "GET")
 
+            # Operational endpoints and healthchecks bypass auth unconditionally
+            if path in ("/health", "/healthz", "/ping"):
+                response = JSONResponse(status_code=200, content={"status": "ok"})
+                return await response(scope, receive, send)
+
+            # Allow public model discovery and Railway healthcheck
+            if not is_websocket and method == "GET" and path in ("/v1/models", "/models"):
+                return await self.app(scope, receive, send)
+
             if self._route_impls is None:
                 top_app = scope.get("app")
                 assert top_app is not None, "scope must contain the FastAPI app under the 'app' key"
@@ -131,15 +140,6 @@ class AuthenticationMiddleware:
                 if webmethod and webmethod.require_authentication is False:
                     logger.debug("Allowing unauthenticated access to endpoint", path=path)
                     return await self.app(scope, receive, send)
-
-            # Operational endpoints and healthchecks bypass auth unconditionally
-            if path in ("/health", "/healthz", "/ping"):
-                response = JSONResponse(status_code=200, content={"status": "ok"})
-                return await response(scope, receive, send)
-
-            # Allow public model discovery and Railway healthcheck
-            if not is_websocket and method == "GET" and path in ("/v1/models", "/models"):
-                return await self.app(scope, receive, send)
 
             # Handle authentication
             if self.auth_provider.requires_http_bearer:
