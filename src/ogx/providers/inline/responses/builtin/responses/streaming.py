@@ -980,6 +980,16 @@ class StreamingResponseOrchestrator:
         """Accumulate chat completion usage into the response usage format."""
         self.accumulated_builtin_output_tokens += usage.completion_tokens
 
+        cached_tokens = 0
+        if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens is not None:
+            cached_tokens = usage.prompt_tokens_details.cached_tokens
+        elif getattr(usage, "prompt_cache_hit_tokens", None) is not None:
+            cached_tokens = usage.prompt_cache_hit_tokens or 0
+
+        reasoning_tokens = 0
+        if usage.completion_tokens_details and usage.completion_tokens_details.reasoning_tokens is not None:
+            reasoning_tokens = usage.completion_tokens_details.reasoning_tokens
+
         if self.accumulated_usage is None:
             # Convert from chat completion format to response format
             self.accumulated_usage = OpenAIResponseUsage(
@@ -987,14 +997,10 @@ class StreamingResponseOrchestrator:
                 output_tokens=usage.completion_tokens,
                 total_tokens=usage.total_tokens,
                 input_tokens_details=OpenAIResponseUsageInputTokensDetails(
-                    cached_tokens=usage.prompt_tokens_details.cached_tokens
-                    if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens is not None
-                    else 0
+                    cached_tokens=cached_tokens
                 ),
                 output_tokens_details=OpenAIResponseUsageOutputTokensDetails(
-                    reasoning_tokens=usage.completion_tokens_details.reasoning_tokens
-                    if usage.completion_tokens_details and usage.completion_tokens_details.reasoning_tokens is not None
-                    else 0
+                    reasoning_tokens=reasoning_tokens
                 ),
             )
         else:
@@ -1004,14 +1010,15 @@ class StreamingResponseOrchestrator:
                 output_tokens=self.accumulated_usage.output_tokens + usage.completion_tokens,
                 total_tokens=self.accumulated_usage.total_tokens + usage.total_tokens,
                 input_tokens_details=OpenAIResponseUsageInputTokensDetails(
-                    cached_tokens=usage.prompt_tokens_details.cached_tokens
-                    if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens is not None
-                    else self.accumulated_usage.input_tokens_details.cached_tokens
+                    cached_tokens=max(
+                        cached_tokens,
+                        self.accumulated_usage.input_tokens_details.cached_tokens if self.accumulated_usage.input_tokens_details else 0,
+                    )
                 ),
                 output_tokens_details=OpenAIResponseUsageOutputTokensDetails(
-                    reasoning_tokens=usage.completion_tokens_details.reasoning_tokens
-                    if usage.completion_tokens_details and usage.completion_tokens_details.reasoning_tokens is not None
-                    else self.accumulated_usage.output_tokens_details.reasoning_tokens
+                    reasoning_tokens=reasoning_tokens
+                    if reasoning_tokens > 0
+                    else (self.accumulated_usage.output_tokens_details.reasoning_tokens if self.accumulated_usage.output_tokens_details else 0)
                 ),
             )
 

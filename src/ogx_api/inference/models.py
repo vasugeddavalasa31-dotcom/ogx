@@ -720,6 +720,12 @@ class OpenAIChatCompletionUsage(BaseModel):
     completion_tokens_details: OpenAIChatCompletionUsageCompletionTokensDetails | None = Field(
         default=None, json_schema_extra=remove_null_from_anyof, description="Detailed breakdown of output token usage."
     )
+    prompt_cache_hit_tokens: int | None = Field(
+        default=None, description="Number of tokens retrieved from cache (DeepSeek/OpenCode style)."
+    )
+    prompt_cache_miss_tokens: int | None = Field(
+        default=None, description="Number of tokens missed in cache (DeepSeek/OpenCode style)."
+    )
 
 
 @json_schema_type

@@ -1750,21 +1750,25 @@ class OpenAIResponsesImpl:
 
         # Build usage from completion
         usage = completion.usage
+        cached_tokens = 0
+        if usage:
+            if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens is not None:
+                cached_tokens = usage.prompt_tokens_details.cached_tokens
+            elif getattr(usage, "prompt_cache_hit_tokens", None) is not None:
+                cached_tokens = usage.prompt_cache_hit_tokens or 0
+        reasoning_tokens = 0
+        if usage and usage.completion_tokens_details and usage.completion_tokens_details.reasoning_tokens is not None:
+            reasoning_tokens = usage.completion_tokens_details.reasoning_tokens
+
         usage_data = OpenAIResponseUsage(
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             input_tokens_details=OpenAIResponseUsageInputTokensDetails(
-                cached_tokens=usage.prompt_tokens_details.cached_tokens
-                if usage and usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens is not None
-                else 0
+                cached_tokens=cached_tokens
             ),
             output_tokens_details=OpenAIResponseUsageOutputTokensDetails(
-                reasoning_tokens=usage.completion_tokens_details.reasoning_tokens
-                if usage
-                and usage.completion_tokens_details
-                and usage.completion_tokens_details.reasoning_tokens is not None
-                else 0
+                reasoning_tokens=reasoning_tokens
             ),
         )
 
