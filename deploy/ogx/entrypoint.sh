@@ -79,6 +79,8 @@ if gateway_models_url:
                 if mid.strip()
             }
             opencode_go_model_ids.update({
+                "deepseek-flash",
+                "deepseek-v4.1-flash",
                 "deepseek-v4-flash",
                 "deepseek-v4-pro",
                 "kimi-k3",
