@@ -1007,7 +1007,15 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
     # Kimi models are served via the OpenCode Go provider in this
     # deployment — always pin them there (see entrypoint.sh for the boot path).
     opencode_go_model_ids.update(
-        {"kimi-k3", "deepseek-flash", "deepseek-v4.1-flash", "deepseek-v4-flash"}
+        {
+            "kimi-k3",
+            "deepseek-flash",
+            "deepseek-v4.1-flash",
+            "deepseek-v4-flash",
+            "glm-5.3-flash",
+            "zai/glm-5.3-flash",
+            "merge/zai/glm-5.3-flash",
+        }
     )
     # The configured URL may be a bare origin (health endpoint); the model list
     # lives under /v1/models.

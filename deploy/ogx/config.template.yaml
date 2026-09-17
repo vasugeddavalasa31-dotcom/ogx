@@ -254,6 +254,16 @@ registered_resources:
       provider_id: opencode-go
       provider_model_id: deepseek-flash
       model_type: llm
+    - metadata: {_unprefixed_alias: true}
+      model_id: merge/zai/glm-5.3-flash
+      provider_id: opencode-go
+      provider_model_id: merge/zai/glm-5.3-flash
+      model_type: llm
+    - metadata: {_unprefixed_alias: true}
+      model_id: glm-5.3-flash
+      provider_id: opencode-go
+      provider_model_id: merge/zai/glm-5.3-flash
+      model_type: llm
   vector_stores: []
 server:
   host: "0.0.0.0"
