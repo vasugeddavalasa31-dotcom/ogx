@@ -1080,12 +1080,17 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 # provider the sync wants it on. Runs every cycle (no seen-set)
                 # so a model wiped by a previous bad reconciliation is
                 # re-registered on the next cycle.
+                PROVIDER_MODEL_ALIASES = {
+                    "merge/zai/glm-5.3-flash": "glm-5.3-flash",
+                    "zai/glm-5.3-flash": "glm-5.3-flash",
+                }
                 for model_id in sorted(wanted):
                     try:
                         provider_id = (
                             wanted_provider.get(model_id)
                             or ("opencode-go" if model_id in opencode_go_model_ids else first_provider)
                         )
+                        target_provider_model_id = PROVIDER_MODEL_ALIASES.get(model_id, model_id)
                         # Re-pin: if the model exists but on a different
                         # provider than the sync wants (e.g. kimi-k3 registered
                         # on "openai" after a routing change), drop the stale
@@ -1094,7 +1099,7 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                             m
                             for m in existing_llm
                             if m.identifier.rsplit("/", 1)[-1] == model_id
-                            and m.provider_id != provider_id
+                            and (m.provider_id != provider_id or getattr(m, "provider_resource_id", None) != target_provider_model_id)
                         ]
                         if stale:
                             for m in stale:
@@ -1116,7 +1121,7 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                                 RegisterModelRequest(
                                     model_id=model_id,
                                     provider_id=provider_id,
-                                    provider_model_id=model_id,
+                                    provider_model_id=target_provider_model_id,
                                     model_type=ModelType.llm,
                                     metadata={"_unprefixed_alias": True},
                                 )
@@ -1135,7 +1140,7 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                                 provider_id=provider_id,
                                 # Pin the provider model id (not "auto") so each
                                 # alias resolves to the exact provider model.
-                                provider_model_id=model_id,
+                                provider_model_id=target_provider_model_id,
                                 model_type=ModelType.llm,
                                 metadata={"_unprefixed_alias": True},
                             )

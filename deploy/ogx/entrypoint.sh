@@ -109,6 +109,10 @@ if gateway_models_url:
                 "muse-spark-1.2-contributor",
             })
             
+            PROVIDER_MODEL_ALIASES = {
+                "merge/zai/glm-5.3-flash": "glm-5.3-flash",
+                "zai/glm-5.3-flash": "glm-5.3-flash",
+            }
             existing_model_ids = {m["model_id"] for m in cfg["registered_resources"].get("models", [])}
             for m in _models:
                 mid = m["id"]
@@ -116,7 +120,7 @@ if gateway_models_url:
                     cfg["registered_resources"]["models"].append({
                         "metadata": {"_unprefixed_alias": True},
                         "model_id": mid,
-                        "provider_model_id": mid,
+                        "provider_model_id": PROVIDER_MODEL_ALIASES.get(mid, mid),
                         "provider_id": "opencode-go" if mid in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or mid.startswith("muse") else "all",
                         "model_type": "llm",
                     })
