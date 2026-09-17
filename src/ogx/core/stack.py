@@ -1012,9 +1012,17 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
             "deepseek-flash",
             "deepseek-v4.1-flash",
             "deepseek-v4-flash",
-            "glm-5.3-flash",
-            "zai/glm-5.3-flash",
+        }
+    )
+    merge_model_ids = {
+        mid.strip()
+        for mid in _os.environ.get("MERGE_MODEL_IDS", "").split(",")
+        if mid.strip()
+    }
+    merge_model_ids.update(
+        {
             "merge/zai/glm-5.3-flash",
+            "zai/glm-5.3-flash",
         }
     )
     # The configured URL may be a bare origin (health endpoint); the model list
@@ -1080,17 +1088,19 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 # provider the sync wants it on. Runs every cycle (no seen-set)
                 # so a model wiped by a previous bad reconciliation is
                 # re-registered on the next cycle.
-                PROVIDER_MODEL_ALIASES = {
-                    "merge/zai/glm-5.3-flash": "glm-5.3-flash",
-                    "zai/glm-5.3-flash": "glm-5.3-flash",
-                }
                 for model_id in sorted(wanted):
                     try:
                         provider_id = (
                             wanted_provider.get(model_id)
-                            or ("opencode-go" if model_id in opencode_go_model_ids else first_provider)
+                            or ("merge" if model_id in merge_model_ids and "merge" in provider_ids else None)
+                            or ("opencode-go" if model_id in opencode_go_model_ids and "opencode-go" in provider_ids else first_provider)
                         )
-                        target_provider_model_id = PROVIDER_MODEL_ALIASES.get(model_id, model_id)
+                        if provider_id == "merge":
+                            target_provider_model_id = "zai/glm-5.3-flash" if "glm-5.3-flash" in model_id else model_id
+                        elif provider_id == "opencode-go":
+                            target_provider_model_id = "glm-5.3-flash" if "glm-5.3-flash" in model_id else model_id
+                        else:
+                            target_provider_model_id = model_id
                         # Re-pin: if the model exists but on a different
                         # provider than the sync wants (e.g. kimi-k3 registered
                         # on "openai" after a routing change), drop the stale

@@ -32,6 +32,14 @@ for p in cfg["providers"]["inference"]:
     elif p.get("provider_id") == "opencode-go":
         api_key = os.environ.get("OPENCODE_GO_API_KEY", "").strip() or "sk-KZt4i5hLCp14QCdqX1Bim5eQa1YFDAWQbUcmKBP5B8KS1WJPdiZ9cz319kWceCOh"
         p["config"]["api_key"] = api_key
+    elif p.get("provider_id") == "merge":
+        api_key = os.environ.get("MERGE_API_KEY", "").strip()
+        p["config"]["api_key"] = api_key
+        base_url = os.environ.get("MERGE_BASE_URL", "").strip()
+        if base_url:
+            p["config"]["base_url"] = base_url
+        if not api_key:
+            print("WARNING: MERGE_API_KEY is not set — requests to merge provider will fail", flush=True)
 
 # Optional: source the LLM model list from the gateway (which reads the TiDB
 # admin_model registry). This makes OGX serve exactly the models enabled in the
@@ -109,19 +117,31 @@ if gateway_models_url:
                 "muse-spark-1.2-contributor",
             })
             
-            PROVIDER_MODEL_ALIASES = {
-                "merge/zai/glm-5.3-flash": "glm-5.3-flash",
-                "zai/glm-5.3-flash": "glm-5.3-flash",
+            merge_model_ids = {
+                mid.strip()
+                for mid in os.environ.get("MERGE_MODEL_IDS", "").split(",")
+                if mid.strip()
             }
+            merge_model_ids.update({
+                "merge/zai/glm-5.3-flash",
+                "zai/glm-5.3-flash",
+            })
+            
             existing_model_ids = {m["model_id"] for m in cfg["registered_resources"].get("models", [])}
             for m in _models:
                 mid = m["id"]
                 if mid not in existing_model_ids:
+                    target_pid = (
+                        "merge" if mid in merge_model_ids or m.get("provider_id") == "merge" or m.get("api_format") == "merge"
+                        else "opencode-go" if mid in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or mid.startswith("muse")
+                        else "all"
+                    )
+                    target_model_id = "zai/glm-5.3-flash" if target_pid == "merge" and "glm-5.3-flash" in mid else "glm-5.3-flash" if target_pid == "opencode-go" and "glm-5.3-flash" in mid else mid
                     cfg["registered_resources"]["models"].append({
                         "metadata": {"_unprefixed_alias": True},
                         "model_id": mid,
-                        "provider_model_id": PROVIDER_MODEL_ALIASES.get(mid, mid),
-                        "provider_id": "opencode-go" if mid in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or mid.startswith("muse") else "all",
+                        "provider_model_id": target_model_id,
+                        "provider_id": target_pid,
                         "model_type": "llm",
                     })
                     existing_model_ids.add(mid)

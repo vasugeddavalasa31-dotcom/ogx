@@ -29,6 +29,14 @@ providers:
         network:
           tls:
             verify: true
+    - provider_id: merge
+      provider_type: remote::openai
+      config:
+        api_key: ${env.MERGE_API_KEY:=}
+        base_url: ${env.MERGE_BASE_URL:=https://api-gateway.merge.dev/v1}
+        network:
+          tls:
+            verify: true
   vector_io:
   - provider_id: faiss
     provider_type: inline::faiss
@@ -256,13 +264,13 @@ registered_resources:
       model_type: llm
     - metadata: {_unprefixed_alias: true}
       model_id: merge/zai/glm-5.3-flash
-      provider_id: opencode-go
-      provider_model_id: glm-5.3-flash
+      provider_id: merge
+      provider_model_id: zai/glm-5.3-flash
       model_type: llm
     - metadata: {_unprefixed_alias: true}
       model_id: glm-5.3-flash
-      provider_id: opencode-go
-      provider_model_id: glm-5.3-flash
+      provider_id: merge
+      provider_model_id: zai/glm-5.3-flash
       model_type: llm
   vector_stores: []
 server:
