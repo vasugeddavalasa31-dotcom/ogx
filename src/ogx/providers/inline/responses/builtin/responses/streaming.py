@@ -981,10 +981,27 @@ class StreamingResponseOrchestrator:
         self.accumulated_builtin_output_tokens += usage.completion_tokens
 
         cached_tokens = 0
-        if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens is not None:
-            cached_tokens = usage.prompt_tokens_details.cached_tokens
+        prompt_details = getattr(usage, "prompt_tokens_details", None) or getattr(usage, "input_tokens_details", None)
+        if prompt_details and getattr(prompt_details, "cached_tokens", None) is not None:
+            cached_tokens = prompt_details.cached_tokens
         elif getattr(usage, "prompt_cache_hit_tokens", None) is not None:
             cached_tokens = usage.prompt_cache_hit_tokens or 0
+        elif getattr(usage, "cached_tokens", None) is not None:
+            cached_tokens = usage.cached_tokens or 0
+        elif getattr(usage, "cached_input_tokens", None) is not None:
+            cached_tokens = usage.cached_input_tokens or 0
+        elif isinstance(getattr(usage, "model_extra", None), dict):
+            extra = usage.model_extra
+            prompt_extra = extra.get("prompt_tokens_details") or extra.get("input_tokens_details")
+            if isinstance(prompt_extra, dict) and prompt_extra.get("cached_tokens") is not None:
+                cached_tokens = prompt_extra.get("cached_tokens") or 0
+            else:
+                cached_tokens = (
+                    extra.get("cached_tokens")
+                    or extra.get("cached_input_tokens")
+                    or extra.get("prompt_cache_hit_tokens")
+                    or 0
+                )
 
         reasoning_tokens = 0
         details = getattr(usage, "completion_tokens_details", None) or getattr(usage, "output_tokens_details", None)

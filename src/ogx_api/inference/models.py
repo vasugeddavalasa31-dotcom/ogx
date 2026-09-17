@@ -704,6 +704,7 @@ class OpenAIChatCompletionUsageCompletionTokensDetails(BaseModel):
 class OpenAIChatCompletionUsagePromptTokensDetails(BaseModel):
     """Token details for prompt tokens in OpenAI chat completion usage."""
 
+    model_config = ConfigDict(extra="allow")
     cached_tokens: int = Field(default=0, ge=0, description="Number of tokens retrieved from cache.")
 
 
@@ -711,11 +712,21 @@ class OpenAIChatCompletionUsagePromptTokensDetails(BaseModel):
 class OpenAIChatCompletionUsage(BaseModel):
     """Usage information for OpenAI chat completion."""
 
+    model_config = ConfigDict(extra="allow")
     prompt_tokens: int = Field(default=0, ge=0, description="Number of tokens in the prompt.")
     completion_tokens: int = Field(default=0, ge=0, description="Number of tokens in the completion.")
     total_tokens: int = Field(default=0, ge=0, description="Total tokens used (prompt + completion).")
     prompt_tokens_details: OpenAIChatCompletionUsagePromptTokensDetails | None = Field(
         default=None, json_schema_extra=remove_null_from_anyof, description="Detailed breakdown of input token usage."
+    )
+    input_tokens_details: OpenAIChatCompletionUsagePromptTokensDetails | None = Field(
+        default=None, json_schema_extra=remove_null_from_anyof, description="Detailed breakdown of input token usage."
+    )
+    cached_tokens: int | None = Field(
+        default=None, description="Number of tokens retrieved from cache."
+    )
+    cached_input_tokens: int | None = Field(
+        default=None, description="Number of tokens retrieved from cache."
     )
     completion_tokens_details: OpenAIChatCompletionUsageCompletionTokensDetails | None = Field(
         default=None, json_schema_extra=remove_null_from_anyof, description="Detailed breakdown of output token usage."
