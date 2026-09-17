@@ -28,12 +28,23 @@ from ogx.providers.utils.inference.http_client import (
 
 
 def _assistant_message_with_reasoning(
-    message: AssistantMessageWithReasoning,
+    message: Any,
 ) -> dict[str, Any]:
     """Serialize an assistant message as a dict, keeping `reasoning_content`
-    (required by DeepSeek's thinking mode) which the OpenAI SDK would drop."""
-    data = message.model_dump(exclude_none=True)
-    data["reasoning_content"] = message.reasoning_content
+    and `thinking` (required by DeepSeek and Merge Gateway thinking modes)
+    which the OpenAI SDK would drop."""
+    if hasattr(message, "model_dump"):
+        data = message.model_dump(exclude_none=True)
+    elif isinstance(message, dict):
+        data = dict(message)
+    else:
+        data = {"role": getattr(message, "role", "assistant"), "content": getattr(message, "content", "")}
+    reasoning = getattr(message, "reasoning_content", None) or getattr(message, "thinking", None)
+    if not reasoning and isinstance(data, dict):
+        reasoning = data.get("reasoning_content") or data.get("thinking")
+    if reasoning:
+        data["reasoning_content"] = reasoning
+        data["thinking"] = reasoning
     return data
 from ogx.providers.utils.inference.model_registry import RemoteInferenceProviderConfig
 from ogx.providers.utils.inference.openai_compat import (
@@ -431,6 +442,8 @@ class OpenAIMixin(NeedsRequestProviderData, ABC, BaseModel):
             _assistant_message_with_reasoning(m)
             if isinstance(m, AssistantMessageWithReasoning)
             or getattr(m, "reasoning_content", None)
+            or getattr(m, "thinking", None)
+            or (isinstance(m, dict) and ("reasoning_content" in m or "thinking" in m))
             else m
             for m in messages
         ]

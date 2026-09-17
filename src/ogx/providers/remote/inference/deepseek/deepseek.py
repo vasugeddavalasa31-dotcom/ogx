@@ -53,7 +53,19 @@ class DeepSeekInferenceAdapter(OpenAIMixin):
             async for chunk in result:
                 reasoning = None
                 for choice in chunk.choices or []:
-                    reasoning = getattr(choice.delta, "reasoning_content", None)
+                    delta = getattr(choice, "delta", None)
+                    if delta is not None:
+                        for attr in ("reasoning_content", "thinking", "reasoning", "reasoning_text"):
+                            val = getattr(delta, attr, None)
+                            if val:
+                                reasoning = str(val)
+                                break
+                        if not reasoning and hasattr(delta, "model_extra") and isinstance(delta.model_extra, dict):
+                            for key in ("reasoning_content", "thinking", "reasoning", "reasoning_text"):
+                                val = delta.model_extra.get(key)
+                                if val:
+                                    reasoning = str(val)
+                                    break
                 yield OpenAIChatCompletionChunkWithReasoning(
                     chunk=chunk,
                     reasoning_content=reasoning,

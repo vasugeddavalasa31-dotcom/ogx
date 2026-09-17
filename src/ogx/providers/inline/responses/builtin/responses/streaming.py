@@ -987,8 +987,11 @@ class StreamingResponseOrchestrator:
             cached_tokens = usage.prompt_cache_hit_tokens or 0
 
         reasoning_tokens = 0
-        if usage.completion_tokens_details and usage.completion_tokens_details.reasoning_tokens is not None:
-            reasoning_tokens = usage.completion_tokens_details.reasoning_tokens
+        details = getattr(usage, "completion_tokens_details", None) or getattr(usage, "output_tokens_details", None)
+        if details:
+            reasoning_tokens = getattr(details, "reasoning_tokens", None) or getattr(details, "thinking_tokens", None) or 0
+            if not reasoning_tokens and isinstance(getattr(details, "model_extra", None), dict):
+                reasoning_tokens = details.model_extra.get("reasoning_tokens") or details.model_extra.get("thinking_tokens") or 0
 
         if self.accumulated_usage is None:
             # Convert from chat completion format to response format
@@ -1247,6 +1250,36 @@ class StreamingResponseOrchestrator:
             self._accumulate_chunk_usage(chunk)
 
             for chunk_choice in chunk.choices:
+                # Extract reasoning directly if not unwrapped from wrapper
+                current_choice_reasoning = reasoning_content
+                if current_choice_reasoning is None and hasattr(chunk_choice, "delta"):
+                    delta = chunk_choice.delta
+                    for attr in ("reasoning_content", "thinking", "reasoning", "reasoning_text"):
+                        val = getattr(delta, attr, None)
+                        if val:
+                            current_choice_reasoning = str(val)
+                            break
+                    if not current_choice_reasoning and hasattr(delta, "model_extra") and isinstance(delta.model_extra, dict):
+                        for key in ("reasoning_content", "thinking", "reasoning", "reasoning_text"):
+                            val = delta.model_extra.get(key)
+                            if val:
+                                current_choice_reasoning = str(val)
+                                break
+                if current_choice_reasoning is None:
+                    for attr in ("thinking", "reasoning_content", "reasoning"):
+                        val = getattr(chunk, attr, None)
+                        if val:
+                            current_choice_reasoning = str(val)
+                            break
+                    if not current_choice_reasoning and hasattr(chunk, "model_extra") and isinstance(chunk.model_extra, dict):
+                        for key in ("thinking", "reasoning_content", "reasoning"):
+                            val = chunk.model_extra.get(key)
+                            if val:
+                                current_choice_reasoning = str(val)
+                                break
+                if current_choice_reasoning:
+                    reasoning_content = current_choice_reasoning
+
                 # Collect logprobs if present
                 chunk_logprobs = None
                 if chunk_choice.logprobs and chunk_choice.logprobs.content:
