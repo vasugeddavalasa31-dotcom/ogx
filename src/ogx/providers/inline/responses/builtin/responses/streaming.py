@@ -726,7 +726,7 @@ class StreamingResponseOrchestrator:
 
                 for choice in current_response.choices:
                     has_tool_calls = choice.message.tool_calls and self.ctx.response_tools
-                    if not has_tool_calls:
+                    if not has_tool_calls or choice.message.content:
                         output_messages.append(
                             await convert_chat_choice_to_response_message(
                                 choice,
@@ -1561,12 +1561,8 @@ class StreamingResponseOrchestrator:
             ):
                 yield event
 
-        # Clear content when there are tool calls (OpenAI spec behavior)
-        if chat_response_tool_calls:
-            chat_response_content = []
-
-        # Emit output_item.done for message when we have content and no tool calls
-        if message_item_added_emitted and not chat_response_tool_calls:
+        # Emit output_item.done for message when we have content
+        if message_item_added_emitted:
             content_parts = []
             if content_part_emitted:
                 final_text = "".join(chat_response_content)
