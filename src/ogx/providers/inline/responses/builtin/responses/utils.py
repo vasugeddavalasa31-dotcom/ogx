@@ -327,6 +327,10 @@ async def convert_response_input_to_chat_messages(
         # OpenAIAssistantMessageParam
         tool_call_results: dict[str, list[OpenAIMessageParam]] = {}
         input_call_ids: set[str] = set()
+        # Tracks tool call ids already emitted as assistant tool_calls messages
+        # so duplicated input items (previous-response echo + client full
+        # history) don't produce a second bare tool_calls message.
+        emitted_tool_call_ids: set[str] = set()
         for input_item in input:
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput):
                 tool_call_results[input_item.call_id] = await _build_tool_result_messages(
@@ -376,6 +380,14 @@ async def convert_response_input_to_chat_messages(
                     " ".join(c.text for c in input_item.content) if input_item.content else None
                 )
             elif isinstance(input_item, OpenAIResponseOutputMessageFunctionToolCall):
+                if input_item.call_id in emitted_tool_call_ids:
+                    # Duplicate function_call item (the same call echoed in a
+                    # previous response's stored output AND in the client's
+                    # full-history input). The tool result was already emitted
+                    # after the first copy; a second bare tool_calls message
+                    # would sit without an adjacent result, which providers
+                    # reject. Skip the duplicate entirely.
+                    continue
                 tool_call = OpenAIChatCompletionToolCall(
                     index=0,
                     id=input_item.call_id,
@@ -394,11 +406,12 @@ async def convert_response_input_to_chat_messages(
                 if input_item.call_id in tool_call_results:
                     messages.extend(tool_call_results[input_item.call_id])
                     del tool_call_results[input_item.call_id]
+                emitted_tool_call_ids.add(input_item.call_id)
             elif isinstance(input_item, OpenAIResponseOutputMessageCustomToolCall):
-                # A custom tool call (e.g. apply_patch) echoed back from the
-                # client as input. The provider saw the custom tool as a plain
-                # function tool with a single `input` string parameter, so
-                # rebuild that shape here.
+                if input_item.call_id in emitted_tool_call_ids:
+                    # Duplicate custom tool call item — see the function_call
+                    # branch above for why duplicates must be skipped.
+                    continue
                 tool_call = OpenAIChatCompletionToolCall(
                     index=0,
                     id=input_item.call_id,
@@ -417,6 +430,7 @@ async def convert_response_input_to_chat_messages(
                 if input_item.call_id in tool_call_results:
                     messages.extend(tool_call_results[input_item.call_id])
                     del tool_call_results[input_item.call_id]
+                emitted_tool_call_ids.add(input_item.call_id)
             elif isinstance(input_item, OpenAIResponseOutputMessageMCPCall):
                 tool_call = OpenAIChatCompletionToolCall(
                     index=0,
