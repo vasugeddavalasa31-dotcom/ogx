@@ -319,6 +319,7 @@ async def convert_response_input_to_chat_messages(
     :param previous_messages: Optional previous messages to check for function_call references
     :param files_api: Files API for resolving file_id to raw file content (optional, required for file/image content)
     """
+    prefix_results: list[OpenAIMessageParam] = []
     messages: list[OpenAIMessageParam] = []
     if isinstance(input, list):
         # extract all function/custom tool call output items
@@ -363,24 +364,24 @@ async def convert_response_input_to_chat_messages(
         # messages.
         pending_reasoning: str | None = None
 
-        # Results for tool calls already emitted in previous_messages must sit
+        # Results for tool calls currently pending in previous_messages must sit
         # IMMEDIATELY after those stored tool_calls messages — before any new
         # content this input introduces (an interleaved assistant text would
         # break the tool_calls→result adjacency providers require). Hoist them
-        # to the front of the converted messages in input order.
-        prefix_results: list[OpenAIMessageParam] = []
+        # to the front of the converted messages in the pending tool call order.
         if previous_messages:
-            for input_item in input:
-                if isinstance(
-                    input_item, OpenAIResponseInputFunctionToolCallOutput
-                ) or isinstance(input_item, OpenAIResponseInputCustomToolCallOutput):
-                    if (
-                        input_item.call_id in emitted_tool_call_ids
-                        and input_item.call_id in tool_call_results
-                    ):
-                        prefix_results.extend(
-                            tool_call_results.pop(input_item.call_id)
-                        )
+            pending_tool_call_ids = _extract_pending_tool_call_ids(previous_messages)
+            for call_id in pending_tool_call_ids:
+                if call_id in tool_call_results:
+                    prefix_results.extend(
+                        tool_call_results.pop(call_id)
+                    )
+
+            # Discard any tool results in input for tool calls already completed in previous_messages
+            # (they are history echoes from full-history replay).
+            for call_id in list(tool_call_results.keys()):
+                if call_id in emitted_tool_call_ids and call_id not in pending_tool_call_ids:
+                    del tool_call_results[call_id]
 
         for input_item in input:
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput) or isinstance(
@@ -586,6 +587,20 @@ def _extract_tool_call_ids(messages: list[OpenAIMessageParam]) -> set[str]:
     return call_ids
 
 
+def _extract_pending_tool_call_ids(messages: list[OpenAIMessageParam]) -> list[str]:
+    """Extract tool call IDs from assistant messages that are still waiting for a tool result."""
+    pending: list[str] = []
+    for msg in messages:
+        if isinstance(msg, OpenAIAssistantMessageParam):
+            for tc in getattr(msg, "tool_calls", None) or []:
+                if tc.id not in pending:
+                    pending.append(tc.id)
+        elif isinstance(msg, OpenAIToolMessageParam):
+            if msg.tool_call_id in pending:
+                pending.remove(msg.tool_call_id)
+    return pending
+
+
 def _message_text(message: OpenAIMessageParam) -> str:
     """Best-effort flat text of a chat message for overlap comparison."""
     content = getattr(message, "content", None)
@@ -612,37 +627,57 @@ def _trim_input_covered_by_messages(
     conversation as `input`. Converting that full history against stored
     messages duplicates every stored message and orphans tool results (the
     result pairs with the stored tool_calls copy, not the re-emitted one).
-    Walk the input backwards: tool-call outputs and calls are covered when
-    their id appears in the stored tool_call ids; plain messages are covered
-    when the stored messages contain the same (role, text). Stop at the first
-    uncovered item — everything from there on is genuinely new.
+    Walk the input backwards: tool-call outputs are covered only if a matching
+    tool message already exists in stored messages; assistant calls are covered
+    if present in stored messages; plain messages are covered when stored
+    messages contain the same (role, text). As soon as the first covered item
+    is encountered scanning backwards, the uncovered suffix starts right after it.
     """
     if not isinstance(input, list) or not stored_messages:
         return input
 
-    stored_call_ids = _extract_tool_call_ids(stored_messages)
+    stored_assistant_call_ids: set[str] = set()
+    stored_completed_call_ids: set[str] = set()
     stored_texts: set[tuple[str, str]] = set()
+    stored_reasoning_texts: set[str] = set()
+
     for msg in stored_messages:
         role = getattr(msg, "role", None)
+        if isinstance(msg, OpenAIAssistantMessageParam):
+            for tc in getattr(msg, "tool_calls", None) or []:
+                stored_assistant_call_ids.add(tc.id)
+            rc = getattr(msg, "reasoning_content", None)
+            if rc:
+                stored_reasoning_texts.add(rc)
+        elif isinstance(msg, OpenAIToolMessageParam):
+            if msg.tool_call_id:
+                stored_completed_call_ids.add(msg.tool_call_id)
         stored_texts.add((role or "", _message_text(msg)))
 
     def _covered(item: object) -> bool:
+        if isinstance(item, (OpenAIResponseInputFunctionToolCallOutput, OpenAIResponseInputCustomToolCallOutput)):
+            return item.call_id in stored_completed_call_ids
+
         call_id = getattr(item, "call_id", None)
         if call_id is not None:
-            return call_id in stored_call_ids
-        role = getattr(item, "role", None)
-        if role is None:
-            return False
-        return (role, _message_text(item)) in stored_texts
+            return call_id in stored_assistant_call_ids
 
-    cut = len(input)
+        if isinstance(item, OpenAIResponseOutputMessageReasoningItem):
+            reasoning_text = " ".join(c.text for c in item.content) if item.content else ""
+            return not reasoning_text or reasoning_text in stored_reasoning_texts
+
+        role = getattr(item, "role", None)
+        if role is not None:
+            return (role, _message_text(item)) in stored_texts
+
+        return True
+
+    cut = 0
     for i in range(len(input) - 1, -1, -1):
-        if not _covered(input[i]):
-            # First uncovered item scanning backwards: everything from here
-            # onward is genuinely new. (Walking further back is not safe —
-            # older items may coincidentally match stored ones — so stop.)
-            cut = i
+        if _covered(input[i]):
+            cut = i + 1
             break
+
     return input[cut:]
 
 

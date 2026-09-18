@@ -11,6 +11,7 @@ import pytest
 
 from ogx.providers.inline.responses.builtin.responses.utils import (
     _extract_citations_from_text,
+    _trim_input_covered_by_messages,
     convert_chat_choice_to_response_message,
     convert_response_content_to_chat_content,
     convert_response_input_to_chat_messages,
@@ -484,7 +485,7 @@ class TestGetMessageTypeByRole:
 
     async def test_developer_role(self):
         result = await get_message_type_by_role("developer")
-        assert result == OpenAIDeveloperMessageParam
+        assert result == OpenAISystemMessageParam
 
     async def test_unknown_role(self):
         result = await get_message_type_by_role("unknown")
@@ -1084,3 +1085,121 @@ class TestExtractCitationsFromTextWithFallback:
 
         assert [a.file_id for a in annotations] == ["file-abc123"]
         assert cleaned_text == "Cited fact. Uncited fact."
+
+
+class TestChainedToolResultsAndTrimming:
+    """Tests for multi-turn / chained responses with tool results and input trimming."""
+
+    def test_trim_input_keeps_uncovered_tool_result(self):
+        stored = [
+            OpenAIUserMessageParam(content="screenshot please"),
+            OpenAIAssistantMessageParam(
+                tool_calls=[
+                    OpenAIChatCompletionToolCall(
+                        index=0,
+                        id="c1",
+                        function=OpenAIChatCompletionToolCallFunction(name="screenshot", arguments="{}"),
+                    )
+                ]
+            ),
+        ]
+        client_input = [
+            OpenAIResponseMessage(role="user", content=[OpenAIResponseInputMessageContentText(text="screenshot please")]),
+            OpenAIResponseOutputMessageFunctionToolCall(id="fc1", call_id="c1", name="screenshot", arguments="{}"),
+            OpenAIResponseInputFunctionToolCallOutput(call_id="c1", output="<image data>"),
+        ]
+        trimmed = _trim_input_covered_by_messages(client_input, stored)
+        assert len(trimmed) == 1
+        assert isinstance(trimmed[0], OpenAIResponseInputFunctionToolCallOutput)
+        assert trimmed[0].call_id == "c1"
+
+    def test_trim_input_keeps_parallel_uncovered_tool_results(self):
+        stored = [
+            OpenAIUserMessageParam(content="run both"),
+            OpenAIAssistantMessageParam(
+                tool_calls=[
+                    OpenAIChatCompletionToolCall(
+                        index=0,
+                        id="c1",
+                        function=OpenAIChatCompletionToolCallFunction(name="tool1", arguments="{}"),
+                    ),
+                    OpenAIChatCompletionToolCall(
+                        index=1,
+                        id="c2",
+                        function=OpenAIChatCompletionToolCallFunction(name="tool2", arguments="{}"),
+                    ),
+                ]
+            ),
+        ]
+        client_input = [
+            OpenAIResponseMessage(role="user", content=[OpenAIResponseInputMessageContentText(text="run both")]),
+            OpenAIResponseOutputMessageFunctionToolCall(id="fc1", call_id="c1", name="tool1", arguments="{}"),
+            OpenAIResponseOutputMessageFunctionToolCall(id="fc2", call_id="c2", name="tool2", arguments="{}"),
+            OpenAIResponseInputFunctionToolCallOutput(call_id="c1", output="out1"),
+            OpenAIResponseInputFunctionToolCallOutput(call_id="c2", output="out2"),
+        ]
+        trimmed = _trim_input_covered_by_messages(client_input, stored)
+        assert len(trimmed) == 2
+        assert [x.call_id for x in trimmed] == ["c1", "c2"]
+
+    def test_trim_input_pure_text_turn(self):
+        stored = [
+            OpenAIUserMessageParam(content="hello"),
+            OpenAIAssistantMessageParam(content="hi there"),
+        ]
+        client_input = [
+            OpenAIResponseMessage(role="user", content=[OpenAIResponseInputMessageContentText(text="hello")]),
+            OpenAIResponseMessage(role="assistant", content=[OpenAIResponseInputMessageContentText(text="hi there")]),
+            OpenAIResponseMessage(role="user", content=[OpenAIResponseInputMessageContentText(text="what is 2+2?")]),
+        ]
+        trimmed = _trim_input_covered_by_messages(client_input, stored)
+        assert len(trimmed) == 1
+        assert getattr(trimmed[0], "role", None) == "user"
+
+    async def test_convert_chained_tool_result_adjacency(self):
+        """Verify that when chaining with previous_messages, the tool result for
+
+        the pending assistant tool_call is placed immediately after it without
+        stale tool results interfering.
+        """
+        previous_messages = [
+            OpenAIUserMessageParam(content="step 1"),
+            OpenAIAssistantMessageParam(
+                tool_calls=[
+                    OpenAIChatCompletionToolCall(
+                        index=0,
+                        id="c_old",
+                        function=OpenAIChatCompletionToolCallFunction(name="old_tool", arguments="{}"),
+                    )
+                ]
+            ),
+            OpenAIToolMessageParam(tool_call_id="c_old", content="old_result"),
+            OpenAIAssistantMessageParam(
+                tool_calls=[
+                    OpenAIChatCompletionToolCall(
+                        index=0,
+                        id="c_new",
+                        function=OpenAIChatCompletionToolCallFunction(name="new_tool", arguments="{}"),
+                    )
+                ]
+            ),
+        ]
+
+        # Client input contains both old output (history echo) and new output
+        input_items = [
+            OpenAIResponseInputFunctionToolCallOutput(call_id="c_old", output="old_result"),
+            OpenAIResponseInputFunctionToolCallOutput(call_id="c_new", output="new_result"),
+        ]
+
+        new_messages = await convert_response_input_to_chat_messages(
+            input_items,
+            previous_messages=previous_messages,
+        )
+
+        # Only the pending tool call 'c_new' should have its result emitted;
+        # 'c_old' is already completed in previous_messages and must not be duplicated.
+        assert len(new_messages) == 1
+        assert isinstance(new_messages[0], OpenAIToolMessageParam)
+        assert new_messages[0].tool_call_id == "c_new"
+        assert new_messages[0].content == "new_result"
+
