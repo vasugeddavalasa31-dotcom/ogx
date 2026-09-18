@@ -420,11 +420,11 @@ class OpenAIResponsesImpl:
                 # reject mid-stream ("tool_calls without matching tool
                 # result messages"). Trim the input to the suffix the stored
                 # messages don't already cover before converting.
+                message_adapter = TypeAdapter(list[OpenAIMessageParam])
+                messages = message_adapter.validate_python(previous_response.messages)
                 trimmed_input = _trim_input_covered_by_messages(
                     input, messages
                 )
-                message_adapter = TypeAdapter(list[OpenAIMessageParam])
-                messages = message_adapter.validate_python(previous_response.messages)
                 new_messages = await convert_response_input_to_chat_messages(
                     trimmed_input,
                     previous_messages=messages,
