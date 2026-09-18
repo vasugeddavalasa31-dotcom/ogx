@@ -638,8 +638,11 @@ def _trim_input_covered_by_messages(
     cut = len(input)
     for i in range(len(input) - 1, -1, -1):
         if not _covered(input[i]):
+            # First uncovered item scanning backwards: everything from here
+            # onward is genuinely new. (Walking further back is not safe —
+            # older items may coincidentally match stored ones — so stop.)
+            cut = i
             break
-        cut = i
     return input[cut:]
 
 
