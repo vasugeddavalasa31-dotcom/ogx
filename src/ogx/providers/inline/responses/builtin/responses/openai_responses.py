@@ -1029,13 +1029,20 @@ class OpenAIResponsesImpl:
                 messages,
                 incremental_input=bool(request.previous_response_id),
             )
-        else:
-            self.responses_store.cache_ephemeral(
-                response,
-                input_items_for_storage,
-                messages,
-                incremental_input=bool(request.previous_response_id),
-            )
+        # Mirror the response into the ephemeral cache even for store=true:
+        # the SQL write is asynchronous from the client's perspective, and a
+        # follow-up request that chains via previous_response_id can arrive
+        # before the row lands (remote DB latency). Without this mirror the
+        # chained lookup misses (no row yet, no ephemeral entry for store=true)
+        # and raises ResponseNotFoundError, killing the stream — the client
+        # then shows "Reconnecting" before its retry succeeds. The cache is a
+        # bounded in-memory fallback consulted only on a store miss.
+        self.responses_store.cache_ephemeral(
+            response,
+            input_items_for_storage,
+            messages,
+            incremental_input=bool(request.previous_response_id),
+        )
 
         in_progress = response.model_copy(
             update={"status": "in_progress", "completed_at": None}
