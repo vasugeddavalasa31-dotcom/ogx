@@ -331,6 +331,15 @@ async def convert_response_input_to_chat_messages(
         # so duplicated input items (previous-response echo + client full
         # history) don't produce a second bare tool_calls message.
         emitted_tool_call_ids: set[str] = set()
+        # Tool call ids already present in `previous_messages` (the stored
+        # chat history of the previous response). When the client sends FULL
+        # history as input while the previous response is reused via its
+        # stored messages, the same function_call appears in BOTH — emitting
+        # it again would place a second tool_calls message far from its
+        # result (the result pairs with the stored copy), which providers
+        # reject. Seed the emitted set so duplicates are skipped.
+        if previous_messages:
+            emitted_tool_call_ids |= _extract_tool_call_ids(previous_messages)
         for input_item in input:
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput):
                 tool_call_results[input_item.call_id] = await _build_tool_result_messages(
@@ -354,6 +363,25 @@ async def convert_response_input_to_chat_messages(
         # messages.
         pending_reasoning: str | None = None
 
+        # Results for tool calls already emitted in previous_messages must sit
+        # IMMEDIATELY after those stored tool_calls messages — before any new
+        # content this input introduces (an interleaved assistant text would
+        # break the tool_calls→result adjacency providers require). Hoist them
+        # to the front of the converted messages in input order.
+        prefix_results: list[OpenAIMessageParam] = []
+        if previous_messages:
+            for input_item in input:
+                if isinstance(
+                    input_item, OpenAIResponseInputFunctionToolCallOutput
+                ) or isinstance(input_item, OpenAIResponseInputCustomToolCallOutput):
+                    if (
+                        input_item.call_id in emitted_tool_call_ids
+                        and input_item.call_id in tool_call_results
+                    ):
+                        prefix_results.extend(
+                            tool_call_results.pop(input_item.call_id)
+                        )
+
         for input_item in input:
             if isinstance(input_item, OpenAIResponseInputFunctionToolCallOutput) or isinstance(
                 input_item, OpenAIResponseInputCustomToolCallOutput
@@ -361,16 +389,21 @@ async def convert_response_input_to_chat_messages(
                 # Tool results close out the current turn; a later assistant
                 # message (if any) is a fresh model turn with its own reasoning.
                 pending_reasoning = None
-                if input_item.call_id not in input_call_ids and previous_messages is not None:
-                    # Incremental turn (previous_response_id): this output
-                    # references a tool call from an earlier response whose
-                    # assistant tool_calls message already lives in
-                    # previous_messages. Emit the tool result here, in input
-                    # order, so it stays immediately adjacent to that stored
-                    # assistant message instead of being deferred past
-                    # interleaved items (e.g. an agent_message delivering a
-                    # sub-agent's final answer), which chat APIs reject.
-                    messages.extend(tool_call_results.pop(input_item.call_id))
+                if (
+                    input_item.call_id not in input_call_ids
+                    or input_item.call_id in emitted_tool_call_ids
+                ) and previous_messages is not None:
+                    # Incremental turn: the call lives in previous_messages
+                    # (not re-sent in input) — emit the result here, in input
+                    # order, so it isn't deferred past interleaved items (e.g.
+                    # an agent_message delivering a sub-agent's final answer),
+                    # which chat APIs reject. (Duplicate echoes — call re-sent
+                    # AND already in previous_messages — were hoisted to
+                    # prefix_results above and are not handled here.)
+                    if input_item.call_id in tool_call_results:
+                        messages.extend(
+                            tool_call_results.pop(input_item.call_id)
+                        )
                 # otherwise skip: paired inline next to its own tool call
                 # below, or validated against previous_messages at the end
             elif isinstance(input_item, OpenAIResponseOutputMessageReasoningItem):
@@ -533,7 +566,11 @@ async def convert_response_input_to_chat_messages(
                 )
     else:
         messages.append(OpenAIUserMessageParam(content=input))
-    return messages
+    # Hoisted results for tool calls already living in previous_messages go
+    # FIRST, immediately after those stored tool_calls messages (the caller
+    # extends its stored list with these messages), preserving the
+    # tool_calls→result adjacency providers require.
+    return prefix_results + messages
 
 
 def _extract_tool_call_ids(messages: list[OpenAIMessageParam]) -> set[str]:
@@ -547,6 +584,63 @@ def _extract_tool_call_ids(messages: list[OpenAIMessageParam]) -> set[str]:
                     # tool_call is a Pydantic model, use attribute access
                     call_ids.add(tool_call.id)
     return call_ids
+
+
+def _message_text(message: OpenAIMessageParam) -> str:
+    """Best-effort flat text of a chat message for overlap comparison."""
+    content = getattr(message, "content", None)
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for part in content:
+        text = getattr(part, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _trim_input_covered_by_messages(
+    input: str | list,
+    stored_messages: list[OpenAIMessageParam],
+) -> str | list:
+    """Trim a full-history `input` down to the suffix not already covered by
+    `stored_messages`.
+
+    Clients that chain via `previous_response_id` may still send the entire
+    conversation as `input`. Converting that full history against stored
+    messages duplicates every stored message and orphans tool results (the
+    result pairs with the stored tool_calls copy, not the re-emitted one).
+    Walk the input backwards: tool-call outputs and calls are covered when
+    their id appears in the stored tool_call ids; plain messages are covered
+    when the stored messages contain the same (role, text). Stop at the first
+    uncovered item — everything from there on is genuinely new.
+    """
+    if not isinstance(input, list) or not stored_messages:
+        return input
+
+    stored_call_ids = _extract_tool_call_ids(stored_messages)
+    stored_texts: set[tuple[str, str]] = set()
+    for msg in stored_messages:
+        role = getattr(msg, "role", None)
+        stored_texts.add((role or "", _message_text(msg)))
+
+    def _covered(item: object) -> bool:
+        call_id = getattr(item, "call_id", None)
+        if call_id is not None:
+            return call_id in stored_call_ids
+        role = getattr(item, "role", None)
+        if role is None:
+            return False
+        return (role, _message_text(item)) in stored_texts
+
+    cut = len(input)
+    for i in range(len(input) - 1, -1, -1):
+        if not _covered(input[i]):
+            break
+        cut = i
+    return input[cut:]
 
 
 async def convert_response_text_to_chat_response_format(

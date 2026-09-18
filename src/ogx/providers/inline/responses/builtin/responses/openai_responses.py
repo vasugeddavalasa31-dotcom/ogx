@@ -98,6 +98,7 @@ from .tool_executor import ToolExecutor
 from .types import ChatCompletionContext, ToolContext
 from .utils import (
     APPROX_CHARS_PER_TOKEN,
+    _trim_input_covered_by_messages,
     convert_response_content_to_chat_content,
     convert_response_input_to_chat_messages,
     convert_response_text_to_chat_response_format,
@@ -409,11 +410,25 @@ class OpenAIResponsesImpl:
             all_input = await self._prepend_previous_response(input, previous_response)
 
             if previous_response.messages:
-                # Use stored messages directly and convert only new input
+                # Use stored messages directly and convert only new input.
+                # Some clients (OrbiterX core) send FULL history in `input`
+                # even when chaining via previous_response_id. Converting the
+                # full history against the stored messages re-emits every
+                # stored system/user/assistant message AND re-emits
+                # tool_calls whose result pairs with the stored copy —
+                # orphaning the result far from its call, which providers
+                # reject mid-stream ("tool_calls without matching tool
+                # result messages"). Trim the input to the suffix the stored
+                # messages don't already cover before converting.
+                trimmed_input = _trim_input_covered_by_messages(
+                    input, messages
+                )
                 message_adapter = TypeAdapter(list[OpenAIMessageParam])
                 messages = message_adapter.validate_python(previous_response.messages)
                 new_messages = await convert_response_input_to_chat_messages(
-                    input, previous_messages=messages, files_api=self.files_api
+                    trimmed_input,
+                    previous_messages=messages,
+                    files_api=self.files_api,
                 )
                 messages.extend(new_messages)
             else:
