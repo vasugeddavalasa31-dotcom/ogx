@@ -41,7 +41,7 @@ providers:
       provider_type: remote::openai
       config:
         api_key: ${env.STEPFUN_API_KEY:=${env.STEP_API_KEY:=}}
-        base_url: ${env.STEPFUN_BASE_URL:=https://api.stepfun.ai/v1}
+        base_url: ${env.STEPFUN_BASE_URL:=https://api.stepfun.ai/step_plan/v1}
         network:
           tls:
             verify: true
