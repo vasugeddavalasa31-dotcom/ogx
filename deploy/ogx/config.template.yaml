@@ -37,6 +37,14 @@ providers:
         network:
           tls:
             verify: true
+    - provider_id: stepfun
+      provider_type: remote::openai
+      config:
+        api_key: ${env.STEPFUN_API_KEY:=${env.STEP_API_KEY:=}}
+        base_url: ${env.STEPFUN_BASE_URL:=https://api.stepfun.ai/v1}
+        network:
+          tls:
+            verify: true
   vector_io:
   - provider_id: faiss
     provider_type: inline::faiss

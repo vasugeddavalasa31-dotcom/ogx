@@ -1090,10 +1090,15 @@ async def gateway_model_sync_task(models_api: Any, url: str, interval_seconds: i
                 # re-registered on the next cycle.
                 for model_id in sorted(wanted):
                     try:
+                        target_wanted_p = wanted_provider.get(model_id)
                         provider_id = (
-                            wanted_provider.get(model_id)
-                            or ("merge" if model_id in merge_model_ids and "merge" in provider_ids else None)
-                            or ("opencode-go" if model_id in opencode_go_model_ids and "opencode-go" in provider_ids else first_provider)
+                            target_wanted_p if (target_wanted_p and target_wanted_p in provider_ids) else None
+                        ) or (
+                            "stepfun" if ("step-" in model_id or "stepfun" in model_id) and "stepfun" in provider_ids else None
+                        ) or (
+                            "merge" if model_id in merge_model_ids and "merge" in provider_ids else None
+                        ) or (
+                            "opencode-go" if model_id in opencode_go_model_ids and "opencode-go" in provider_ids else first_provider
                         )
                         if provider_id == "merge":
                             target_provider_model_id = "zai/glm-5.3-flash" if "glm-5.3-flash" in model_id else model_id

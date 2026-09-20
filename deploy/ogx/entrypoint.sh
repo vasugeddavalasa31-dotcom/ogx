@@ -24,15 +24,16 @@ with open(template_file) as f:
     cfg = yaml.safe_load(f)
 
 for p in cfg["providers"]["inference"]:
-    if p.get("provider_id") == "openai":
+    pid = p.get("provider_id")
+    if pid == "openai":
         api_key = os.environ.get("DEEPSEEK_API_KEY", "")
         p["config"]["api_key"] = api_key
         if not api_key:
             print("WARNING: DEEPSEEK_API_KEY is not set — server will start but requests will fail", flush=True)
-    elif p.get("provider_id") == "opencode-go":
+    elif pid == "opencode-go":
         api_key = os.environ.get("OPENCODE_GO_API_KEY", "").strip() or "sk-KZt4i5hLCp14QCdqX1Bim5eQa1YFDAWQbUcmKBP5B8KS1WJPdiZ9cz319kWceCOh"
         p["config"]["api_key"] = api_key
-    elif p.get("provider_id") == "merge":
+    elif pid == "merge":
         api_key = os.environ.get("MERGE_API_KEY", "").strip()
         p["config"]["api_key"] = api_key
         base_url = os.environ.get("MERGE_BASE_URL", "").strip()
@@ -40,6 +41,14 @@ for p in cfg["providers"]["inference"]:
             p["config"]["base_url"] = base_url
         if not api_key:
             print("WARNING: MERGE_API_KEY is not set — requests to merge provider will fail", flush=True)
+    elif pid == "stepfun":
+        api_key = os.environ.get("STEPFUN_API_KEY", "").strip() or os.environ.get("STEP_API_KEY", "").strip()
+        p["config"]["api_key"] = api_key
+        base_url = os.environ.get("STEPFUN_BASE_URL", "").strip()
+        if base_url:
+            p["config"]["base_url"] = base_url
+        if not api_key:
+            print("WARNING: STEPFUN_API_KEY is not set — requests to stepfun provider will fail", flush=True)
 
 # Optional: source the LLM model list from the gateway (which reads the TiDB
 # admin_model registry). This makes OGX serve exactly the models enabled in the
@@ -127,16 +136,80 @@ if gateway_models_url:
                 "zai/glm-5.3-flash",
             })
             
+            existing_provider_ids = {p.get("provider_id") for p in cfg["providers"]["inference"]}
             existing_model_ids = {m["model_id"] for m in cfg["registered_resources"].get("models", [])}
+
+            # 1. Dynamic provider auto-registration from environment variables:
+            # Any {NAME}_API_KEY with corresponding {NAME}_BASE_URL or {NAME}_ENDPOINT
+            for env_k, env_v in os.environ.items():
+                if env_k.endswith("_API_KEY") and env_v.strip():
+                    p_name = env_k[:-8].lower().replace("_", "-")
+                    base_url = (
+                        os.environ.get(f"{env_k[:-8]}_BASE_URL", "").strip()
+                        or os.environ.get(f"{env_k[:-8]}_ENDPOINT", "").strip()
+                    )
+                    if p_name not in existing_provider_ids and base_url:
+                        cfg["providers"]["inference"].append({
+                            "provider_id": p_name,
+                            "provider_type": "remote::openai",
+                            "config": {
+                                "api_key": env_v.strip(),
+                                "base_url": base_url,
+                                "network": {"tls": {"verify": True}},
+                            },
+                        })
+                        existing_provider_ids.add(p_name)
+                        print(f"Dynamically registered provider from env: {p_name} -> {base_url}", flush=True)
+
+            # 2. Dynamic provider & model discovery from TiDB Gateway response:
             for m in _models:
                 mid = m["id"]
+                endpoint = (m.get("endpoint") or "").strip()
+                api_format = (m.get("api_format") or "").strip()
+                model_prov = (m.get("provider_id") or "").strip()
+
+                # Determine target provider ID
+                target_pid = (
+                    model_prov if model_prov and model_prov != "openai"
+                    else api_format if api_format and api_format != "openai"
+                    else "merge" if (mid in merge_model_ids or "merge" in endpoint)
+                    else "stepfun" if ("stepfun" in endpoint or "step-" in mid)
+                    else "opencode-go" if (mid in opencode_go_model_ids or mid.startswith("muse"))
+                    else "openai"
+                )
+
+                # Auto-register external provider if not already registered
+                if target_pid not in existing_provider_ids and endpoint and "ogxraiwy" not in endpoint:
+                    raw_key = (m.get("api_key") or "").strip()
+                    api_key = os.environ.get(raw_key, "") if raw_key in os.environ else raw_key
+                    if not api_key:
+                        for cand in [
+                            f"{target_pid.upper().replace('-', '_')}_API_KEY",
+                            f"{target_pid.upper().replace('-', '_')}_KEY",
+                            f"{target_pid.upper().replace('-', '')}_API_KEY",
+                        ]:
+                            if cand in os.environ:
+                                api_key = os.environ[cand].strip()
+                                break
+
+                    cfg["providers"]["inference"].append({
+                        "provider_id": target_pid,
+                        "provider_type": "remote::openai",
+                        "config": {
+                            "api_key": api_key,
+                            "base_url": endpoint,
+                            "network": {"tls": {"verify": True}},
+                        },
+                    })
+                    existing_provider_ids.add(target_pid)
+                    print(f"Dynamically registered provider from TiDB: {target_pid} -> {endpoint} (key present: {bool(api_key)})", flush=True)
+
                 if mid not in existing_model_ids:
-                    target_pid = (
-                        "merge" if mid in merge_model_ids or m.get("provider_id") == "merge" or m.get("api_format") == "merge"
-                        else "opencode-go" if mid in opencode_go_model_ids or m.get("provider_id") == "opencode-go" or mid.startswith("muse")
-                        else "all"
+                    target_model_id = (
+                        "zai/glm-5.3-flash" if target_pid == "merge" and "glm-5.3-flash" in mid
+                        else "glm-5.3-flash" if target_pid == "opencode-go" and "glm-5.3-flash" in mid
+                        else mid
                     )
-                    target_model_id = "zai/glm-5.3-flash" if target_pid == "merge" and "glm-5.3-flash" in mid else "glm-5.3-flash" if target_pid == "opencode-go" and "glm-5.3-flash" in mid else mid
                     cfg["registered_resources"]["models"].append({
                         "metadata": {"_unprefixed_alias": True},
                         "model_id": mid,
